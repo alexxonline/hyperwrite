@@ -1,0 +1,32 @@
+from datetime import datetime
+
+from pydantic import BaseModel, Field
+
+
+class PieceSummary(BaseModel):
+    slug: str
+    title: str
+    created_at: datetime
+    path: str
+    research_enabled: bool = False
+
+
+class Piece(PieceSummary):
+    markdown: str
+    review: str = ""
+    prompt: str = ""
+
+
+class GenerationResponse(BaseModel):
+    piece: Piece
+    review: str
+    research: str = ""
+
+
+class GenerationOptions(BaseModel):
+    prompt: str = Field(min_length=1)
+    use_research: bool = False
+    style: str = ""
+    writer_model: str | None = None
+    reviewer_model: str | None = None
+    research_model: str | None = None
