@@ -9,6 +9,7 @@ class PieceSummary(BaseModel):
     created_at: datetime
     path: str
     research_enabled: bool = False
+    anti_ai_style_enabled: bool = False
 
 
 class Piece(PieceSummary):
@@ -32,6 +33,7 @@ class ModelDefaults(BaseModel):
 class GenerationOptions(BaseModel):
     prompt: str = Field(min_length=1)
     use_research: bool = False
+    use_anti_ai_style: bool = False
     style: str = ""
     writer_model: str | None = None
     reviewer_model: str | None = None

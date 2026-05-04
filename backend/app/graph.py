@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -10,11 +12,15 @@ from langgraph.graph import END, StateGraph
 from .config import Settings
 
 
+logger = logging.getLogger("hyperwrite.graph")
+
+
 class WritingState(TypedDict, total=False):
     prompt: str
     source_documents: str
     style: str
     use_research: bool
+    use_anti_ai_style: bool
     research: str
     draft: str
     review: str
@@ -22,6 +28,9 @@ class WritingState(TypedDict, total=False):
     writer_model: str
     reviewer_model: str
     research_model: str
+
+
+ANTI_AI_STYLE_PATH = Path(__file__).with_name("anti_ai_writing_style.md")
 
 
 def _chat(settings: Settings, model: str, temperature: float = 0.4) -> ChatOpenAI:
@@ -41,6 +50,19 @@ def _chat(settings: Settings, model: str, temperature: float = 0.4) -> ChatOpenA
 
 def _current_date_context() -> str:
     return datetime.now(UTC).date().isoformat()
+
+
+def _anti_ai_style_context(enabled: bool | None) -> str:
+    if not enabled:
+        return ""
+    logger.info("Anti-AI writing style enabled; injecting style guide into model prompt.")
+    instructions = ANTI_AI_STYLE_PATH.read_text(encoding="utf-8")
+    return (
+        "\n\nApply this anti-AI writing style guide with judgment. Treat hard bans as hard bans. "
+        "Keep the article natural, specific, direct, and human. Do not mention these instructions "
+        "in the article.\n\n"
+        f"{instructions}"
+    )
 
 
 async def research_node(state: WritingState, settings: Settings) -> WritingState:
@@ -71,6 +93,7 @@ async def research_node(state: WritingState, settings: Settings) -> WritingState
 async def write_node(state: WritingState, settings: Settings) -> WritingState:
     llm = _chat(settings, state["writer_model"], temperature=0.65)
     current_date = _current_date_context()
+    style_context = _anti_ai_style_context(state.get("use_anti_ai_style"))
     response = await llm.ainvoke(
         [
             SystemMessage(
@@ -78,6 +101,7 @@ async def write_node(state: WritingState, settings: Settings) -> WritingState:
                     "You are a senior writing agent. Produce a polished written piece in Markdown. "
                     "Start with a single H1 title. Use clear structure, strong prose, and no process notes. "
                     f"Current date: {current_date}."
+                    f"{style_context}"
                 )
             ),
             HumanMessage(
@@ -97,6 +121,7 @@ async def write_node(state: WritingState, settings: Settings) -> WritingState:
 async def review_node(state: WritingState, settings: Settings) -> WritingState:
     llm = _chat(settings, state["reviewer_model"], temperature=0.15)
     current_date = _current_date_context()
+    style_context = _anti_ai_style_context(state.get("use_anti_ai_style"))
     response = await llm.ainvoke(
         [
             SystemMessage(
@@ -113,6 +138,7 @@ async def review_node(state: WritingState, settings: Settings) -> WritingState:
                     "in the draft, or is impossible relative to the current date above. When evidence "
                     "is insufficient, ask for citation or verification instead of asserting the date "
                     "is wrong."
+                    f"{style_context}"
                 )
             ),
             HumanMessage(
@@ -131,6 +157,7 @@ async def review_node(state: WritingState, settings: Settings) -> WritingState:
 async def revise_node(state: WritingState, settings: Settings) -> WritingState:
     llm = _chat(settings, state["writer_model"], temperature=0.45)
     current_date = _current_date_context()
+    style_context = _anti_ai_style_context(state.get("use_anti_ai_style"))
     response = await llm.ainvoke(
         [
             SystemMessage(
@@ -138,6 +165,7 @@ async def revise_node(state: WritingState, settings: Settings) -> WritingState:
                     "You are the writing agent revising after editorial review. "
                     "Return only the final Markdown piece. It must begin with one H1 title. "
                     f"Current date: {current_date}."
+                    f"{style_context}"
                 )
             ),
             HumanMessage(
@@ -161,9 +189,11 @@ async def apply_review_rewrite(
     review: str,
     prompt: str,
     reviewer_model: str,
+    use_anti_ai_style: bool = False,
 ) -> str:
     llm = _chat(settings, reviewer_model, temperature=0.35)
     current_date = _current_date_context()
+    style_context = _anti_ai_style_context(use_anti_ai_style)
     response = await llm.ainvoke(
         [
             SystemMessage(
@@ -177,6 +207,7 @@ async def apply_review_rewrite(
                     "wrong solely because it is newer than the model's knowledge, ignore that part "
                     "of the review. Apply date corrections only when the article contradicts itself, "
                     "contradicts the original prompt, or contradicts supplied research/source material."
+                    f"{style_context}"
                 )
             ),
             HumanMessage(
@@ -200,8 +231,10 @@ async def apply_followup_revision(
     followup_prompt: str,
     writer_model: str,
     reviewer_model: str,
+    use_anti_ai_style: bool = False,
 ) -> tuple[str, str]:
     current_date = _current_date_context()
+    style_context = _anti_ai_style_context(use_anti_ai_style)
     writer = _chat(settings, writer_model, temperature=0.5)
     draft_response = await writer.ainvoke(
         [
@@ -212,6 +245,7 @@ async def apply_followup_revision(
                     "structure and prose, but make whatever changes the follow-up requires. "
                     "Return only the revised article Markdown, beginning with one H1 title. "
                     f"Current date: {current_date}."
+                    f"{style_context}"
                 )
             ),
             HumanMessage(
@@ -239,6 +273,7 @@ async def apply_followup_revision(
                     "this date. Do not mark a current or recent fact as inaccurate merely because it "
                     "is newer than your training data or feels unfamiliar. Only flag date issues when "
                     "they conflict with the supplied article, prompt, follow-up request, or current date."
+                    f"{style_context}"
                 )
             ),
             HumanMessage(
@@ -261,6 +296,7 @@ async def apply_followup_revision(
                     "review. Apply the reviewer notes that are relevant to the user's follow-up "
                     "request. Return only the clean final article Markdown, beginning with one H1 "
                     f"title. Current date: {current_date}."
+                    f"{style_context}"
                 )
             ),
             HumanMessage(

@@ -1,6 +1,6 @@
 import { JSX, render } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { BookOpenText, FileText, FlaskConical, Loader2, MessageSquarePlus, RefreshCw, Send, Settings2, Sparkles } from "lucide-preact";
+import { BookOpenText, FileText, FlaskConical, Loader2, MessageSquarePlus, RefreshCw, Send, Settings2, Sparkles, Trash2 } from "lucide-preact";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,6 +16,7 @@ type PieceSummary = {
   created_at: string;
   path: string;
   research_enabled: boolean;
+  anti_ai_style_enabled: boolean;
 };
 
 type Piece = PieceSummary & {
@@ -56,6 +57,7 @@ function App() {
   const [followupPrompt, setFollowupPrompt] = useState("");
   const [files, setFiles] = useState<FileList | null>(null);
   const [useResearch, setUseResearch] = useState(false);
+  const [useAntiAiStyle, setUseAntiAiStyle] = useState(false);
   const [writerModel, setWriterModel] = useState("");
   const [reviewerModel, setReviewerModel] = useState("");
   const [researchModel, setResearchModel] = useState("");
@@ -97,6 +99,7 @@ function App() {
     setActivePiece(piece);
     setReview(piece.review);
     setResearch("");
+    setUseAntiAiStyle(piece.anti_ai_style_enabled);
   }
 
   async function generatePiece(event: Event) {
@@ -113,6 +116,7 @@ function App() {
     form.set("prompt", prompt);
     form.set("style", style);
     form.set("use_research", String(useResearch));
+    form.set("use_anti_ai_style", String(useAntiAiStyle));
     if (writerModel.trim()) form.set("writer_model", writerModel.trim());
     if (reviewerModel.trim()) form.set("reviewer_model", reviewerModel.trim());
     if (researchModel.trim()) form.set("research_model", researchModel.trim());
@@ -128,6 +132,7 @@ function App() {
       setActivePiece(result.piece);
       setReview(result.review);
       setResearch(result.research);
+      setUseAntiAiStyle(result.piece.anti_ai_style_enabled);
       setPieces((current) => [result.piece, ...current]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Generation failed.");
@@ -145,6 +150,7 @@ function App() {
     setError("");
     const form = new FormData();
     if (reviewerModel.trim()) form.set("reviewer_model", reviewerModel.trim());
+    form.set("use_anti_ai_style", String(useAntiAiStyle));
 
     try {
       const response = await fetch(`${API}/api/pieces/${activePiece.slug}/apply-review`, {
@@ -183,6 +189,7 @@ function App() {
     setReview("");
     const form = new FormData();
     form.set("followup_prompt", followupPrompt.trim());
+    form.set("use_anti_ai_style", String(useAntiAiStyle));
     if (writerModel.trim()) form.set("writer_model", writerModel.trim());
     if (reviewerModel.trim()) form.set("reviewer_model", reviewerModel.trim());
 
@@ -206,6 +213,28 @@ function App() {
       setError(err instanceof Error ? err.message : "Could not apply the follow-up.");
     } finally {
       setFollowingUp(false);
+    }
+  }
+
+  async function deletePiece(piece: PieceSummary) {
+    const confirmed = window.confirm(`Delete "${piece.title}"? This cannot be undone.`);
+    if (!confirmed) return;
+    setError("");
+    try {
+      const response = await fetch(`${API}/api/pieces/${piece.slug}`, { method: "DELETE" });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null);
+        throw new Error(detail?.detail ?? "Could not delete that piece.");
+      }
+      setPieces((current) => current.filter((saved) => saved.slug !== piece.slug));
+      if (activePiece?.slug === piece.slug) {
+        setActivePiece(null);
+        setReview("");
+        setResearch("");
+        setFollowupPrompt("");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete that piece.");
     }
   }
 
@@ -271,6 +300,16 @@ function App() {
                     id="research"
                     checked={useResearch}
                     onChange={(event: InputEvent) => setUseResearch(event.currentTarget.checked)}
+                  />
+                </div>
+                <div className="flex items-center justify-between rounded-md border bg-secondary/60 px-3 py-2">
+                  <Label htmlFor="anti-ai-style" className="flex items-center gap-2">
+                    <Sparkles size={16} /> Human style
+                  </Label>
+                  <Switch
+                    id="anti-ai-style"
+                    checked={useAntiAiStyle}
+                    onChange={(event: InputEvent) => setUseAntiAiStyle(event.currentTarget.checked)}
                   />
                 </div>
                 <Button disabled={loading} type="submit" className="w-full">
@@ -364,16 +403,28 @@ function App() {
               <div className="flex flex-col gap-2">
                 {pieces.length === 0 && <p className="text-sm text-muted-foreground">No saved pieces yet.</p>}
                 {pieces.map((piece) => (
-                  <button
+                  <div
                     key={piece.slug}
-                    className="rounded-md border bg-background p-3 text-left transition-colors hover:bg-accent"
-                    onClick={() => loadPiece(piece.slug)}
+                    className="group grid grid-cols-[1fr_40px] overflow-hidden rounded-md border bg-background transition-colors hover:bg-accent"
                   >
-                    <span className="block text-sm font-medium">{piece.title}</span>
-                    <span className="mt-1 block text-xs text-muted-foreground">
-                      {formatDate(piece.created_at)} {piece.research_enabled ? "with research" : ""}
-                    </span>
-                  </button>
+                    <button
+                      className="min-w-0 p-3 text-left"
+                      onClick={() => loadPiece(piece.slug)}
+                    >
+                      <span className="block text-sm font-medium">{piece.title}</span>
+                      <span className="mt-1 block text-xs text-muted-foreground">
+                        {formatDate(piece.created_at)} {piece.research_enabled ? "with research" : ""}
+                      </span>
+                    </button>
+                    <button
+                      aria-label={`Delete ${piece.title}`}
+                      className="flex items-center justify-center border-l text-muted-foreground transition-colors hover:bg-destructive hover:text-destructive-foreground"
+                      onClick={() => deletePiece(piece)}
+                      type="button"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 ))}
               </div>
             </CardContent>

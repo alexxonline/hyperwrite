@@ -53,6 +53,7 @@ def save_piece(
     prompt: str,
     review: str,
     research_enabled: bool,
+    anti_ai_style_enabled: bool,
     writer_model: str,
     reviewer_model: str,
     research_model: str,
@@ -75,6 +76,7 @@ def save_piece(
                 "title": title,
                 "created_at": created_at.isoformat(),
                 "research_enabled": research_enabled,
+                "anti_ai_style_enabled": anti_ai_style_enabled,
                 "writer_model": writer_model,
                 "reviewer_model": reviewer_model,
                 "research_model": research_model,
@@ -95,6 +97,7 @@ def save_piece(
         review=review,
         prompt=prompt,
         research_enabled=research_enabled,
+        anti_ai_style_enabled=anti_ai_style_enabled,
     )
 
 
@@ -128,6 +131,7 @@ def update_piece_markdown(
     writer_model: str | None = None,
     review: str | None = None,
     followup_prompt: str | None = None,
+    anti_ai_style_enabled: bool | None = None,
 ) -> Piece:
     path = pieces_dir / f"{slug}.md"
     metadata, _ = _read_metadata_and_body(path)
@@ -157,6 +161,9 @@ def update_piece_markdown(
         "title": title,
         "created_at": created_at.isoformat(),
         "research_enabled": existing.research_enabled,
+        "anti_ai_style_enabled": existing.anti_ai_style_enabled
+        if anti_ai_style_enabled is None
+        else anti_ai_style_enabled,
         "prompt": existing.prompt,
         "review_path": review_path,
     }
@@ -223,6 +230,7 @@ def list_pieces(pieces_dir: Path) -> list[PieceSummary]:
                 created_at=created,
                 path=str(path),
                 research_enabled=metadata.get("research_enabled") in {True, "true"},
+                anti_ai_style_enabled=metadata.get("anti_ai_style_enabled") in {True, "true"},
             )
         )
     return summaries
@@ -245,4 +253,26 @@ def read_piece(pieces_dir: Path, slug: str) -> Piece:
         review=review,
         prompt=metadata.get("prompt", ""),
         research_enabled=metadata.get("research_enabled") in {True, "true"},
+        anti_ai_style_enabled=metadata.get("anti_ai_style_enabled") in {True, "true"},
     )
+
+
+def delete_piece(pieces_dir: Path, slug: str) -> None:
+    path = pieces_dir / f"{slug}.md"
+    if not path.exists():
+        raise FileNotFoundError(slug)
+    metadata = load_companion_metadata(path)
+    review_path = metadata.get("review_path")
+    paths = [path, metadata_path_for(path), review_path_for(pieces_dir, slug)]
+    if review_path:
+        paths.append(Path(str(review_path)))
+
+    for candidate in paths:
+        if not isinstance(candidate, Path):
+            continue
+        try:
+            candidate.relative_to(pieces_dir.parent)
+        except ValueError:
+            continue
+        if candidate.exists() and candidate.is_file():
+            candidate.unlink()

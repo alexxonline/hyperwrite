@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import Settings, get_settings
 from .graph import apply_followup_revision, apply_review_rewrite, build_graph
 from .models import GenerationResponse, ModelDefaults, Piece, PieceSummary
-from .storage import list_pieces, read_piece, save_piece, update_piece_markdown
+from .storage import delete_piece, list_pieces, read_piece, save_piece, update_piece_markdown
 
 
 app = FastAPI(title="Hyperwrite API")
@@ -79,10 +79,19 @@ async def get_piece(slug: str, settings: Settings = Depends(get_settings)) -> Pi
         raise HTTPException(status_code=404, detail="Piece not found.") from exc
 
 
+@app.delete("/api/pieces/{slug}", status_code=204)
+async def remove_piece(slug: str, settings: Settings = Depends(get_settings)) -> None:
+    try:
+        delete_piece(settings.pieces_dir, slug)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Piece not found.") from exc
+
+
 @app.post("/api/pieces/{slug}/apply-review", response_model=Piece)
 async def apply_piece_review(
     slug: str,
     reviewer_model: str | None = Form(None),
+    use_anti_ai_style: bool | None = Form(None),
     settings: Settings = Depends(get_settings),
 ) -> Piece:
     try:
@@ -93,6 +102,9 @@ async def apply_piece_review(
         raise HTTPException(status_code=400, detail="This piece does not have review notes to apply.")
 
     chosen_reviewer = reviewer_model or settings.reviewer_model
+    chosen_anti_ai_style = (
+        piece.anti_ai_style_enabled if use_anti_ai_style is None else use_anti_ai_style
+    )
     try:
         rewritten = await apply_review_rewrite(
             settings=settings,
@@ -100,6 +112,7 @@ async def apply_piece_review(
             review=piece.review,
             prompt=piece.prompt,
             reviewer_model=chosen_reviewer,
+            use_anti_ai_style=chosen_anti_ai_style,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -109,6 +122,7 @@ async def apply_piece_review(
         slug=slug,
         markdown=rewritten,
         reviewer_model=chosen_reviewer,
+        anti_ai_style_enabled=chosen_anti_ai_style,
     )
 
 
@@ -118,6 +132,7 @@ async def apply_piece_followup(
     followup_prompt: str = Form(...),
     writer_model: str | None = Form(None),
     reviewer_model: str | None = Form(None),
+    use_anti_ai_style: bool | None = Form(None),
     settings: Settings = Depends(get_settings),
 ) -> Piece:
     if not followup_prompt.strip():
@@ -129,6 +144,9 @@ async def apply_piece_followup(
 
     chosen_writer = writer_model or settings.writer_model
     chosen_reviewer = reviewer_model or settings.reviewer_model
+    chosen_anti_ai_style = (
+        piece.anti_ai_style_enabled if use_anti_ai_style is None else use_anti_ai_style
+    )
     try:
         final_markdown, review = await apply_followup_revision(
             settings=settings,
@@ -137,6 +155,7 @@ async def apply_piece_followup(
             followup_prompt=followup_prompt.strip(),
             writer_model=chosen_writer,
             reviewer_model=chosen_reviewer,
+            use_anti_ai_style=chosen_anti_ai_style,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -149,6 +168,7 @@ async def apply_piece_followup(
         reviewer_model=chosen_reviewer,
         review=review,
         followup_prompt=followup_prompt.strip(),
+        anti_ai_style_enabled=chosen_anti_ai_style,
     )
 
 
@@ -156,6 +176,7 @@ async def apply_piece_followup(
 async def create_piece(
     prompt: str = Form(...),
     use_research: bool = Form(False),
+    use_anti_ai_style: bool = Form(False),
     style: str = Form(""),
     writer_model: str | None = Form(None),
     reviewer_model: str | None = Form(None),
@@ -175,6 +196,7 @@ async def create_piece(
                 "source_documents": source_documents,
                 "style": style,
                 "use_research": use_research,
+                "use_anti_ai_style": use_anti_ai_style,
                 "writer_model": chosen_writer,
                 "reviewer_model": chosen_reviewer,
                 "research_model": chosen_research,
@@ -193,6 +215,7 @@ async def create_piece(
         prompt=prompt,
         review=result.get("review", ""),
         research_enabled=use_research,
+        anti_ai_style_enabled=use_anti_ai_style,
         writer_model=chosen_writer,
         reviewer_model=chosen_reviewer,
         research_model=chosen_research,
