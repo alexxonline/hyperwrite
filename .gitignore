@@ -11,3 +11,5 @@ __pycache__/
 *.pyc
 .DS_Store
 data/pieces/*.md
+data/pieces/*.json
+data/reviews/*.md

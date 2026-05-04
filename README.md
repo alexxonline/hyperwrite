@@ -5,7 +5,8 @@ A local writing studio with a FastAPI backend, Preact frontend, shadcn/ui-style 
 ## Features
 
 - Generate written pieces from a prompt and optional `.md` / `.txt` source files.
-- Save every completed piece as Markdown in `data/pieces`.
+- Save every completed piece as clean article Markdown in `data/pieces`.
+- Save reviewer notes separately in `data/reviews` with generation metadata beside each piece.
 - Use OpenRouter for all model calls.
 - Draft with a writer agent, review with a reviewer agent, and revise before presenting.
 - Optionally add a research agent that uses Perplexity through OpenRouter.

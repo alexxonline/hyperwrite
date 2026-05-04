@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -23,37 +24,26 @@ def extract_title(markdown: str) -> str:
     return "Untitled piece"
 
 
-def _quote_frontmatter(value: str) -> str:
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ") + '"'
+def reviews_dir_for(pieces_dir: Path) -> Path:
+    return pieces_dir.parent / "reviews"
 
 
-def build_markdown_document(
+def metadata_path_for(piece_path: Path) -> Path:
+    return piece_path.with_suffix(".json")
+
+
+def review_path_for(pieces_dir: Path, slug: str) -> Path:
+    return reviews_dir_for(pieces_dir) / f"{slug}.md"
+
+
+def build_article_document(
     *,
     markdown: str,
-    prompt: str,
-    review: str,
-    research_enabled: bool,
-    writer_model: str,
-    reviewer_model: str,
-    research_model: str,
     created_at: datetime | None = None,
 ) -> tuple[str, str, datetime]:
     created = created_at or datetime.now(UTC)
     title = extract_title(markdown)
-    frontmatter = [
-        "---",
-        f"title: {_quote_frontmatter(title)}",
-        f"created_at: {created.isoformat()}",
-        f"research_enabled: {str(research_enabled).lower()}",
-        f"writer_model: {_quote_frontmatter(writer_model)}",
-        f"reviewer_model: {_quote_frontmatter(reviewer_model)}",
-        f"research_model: {_quote_frontmatter(research_model)}",
-        f"prompt: {_quote_frontmatter(prompt)}",
-        "review: |-",
-    ]
-    frontmatter.extend(f"  {line}" for line in review.splitlines() or [""])
-    frontmatter.append("---")
-    return title, "\n".join(frontmatter) + "\n\n" + markdown.strip() + "\n", created
+    return title, markdown.strip() + "\n", created
 
 
 def save_piece(
@@ -68,20 +58,34 @@ def save_piece(
     research_model: str,
 ) -> Piece:
     pieces_dir.mkdir(parents=True, exist_ok=True)
-    title, document, created_at = build_markdown_document(
+    reviews_dir_for(pieces_dir).mkdir(parents=True, exist_ok=True)
+    title, document, created_at = build_article_document(
         markdown=markdown,
-        prompt=prompt,
-        review=review,
-        research_enabled=research_enabled,
-        writer_model=writer_model,
-        reviewer_model=reviewer_model,
-        research_model=research_model,
     )
     base_slug = slugify(title)
     stamp = created_at.strftime("%Y%m%d%H%M%S")
     slug = f"{base_slug}-{stamp}"
     path = pieces_dir / f"{slug}.md"
+    review_path = review_path_for(pieces_dir, slug)
     path.write_text(document, encoding="utf-8")
+    review_path.write_text(review.strip() + "\n", encoding="utf-8")
+    metadata_path_for(path).write_text(
+        json.dumps(
+            {
+                "title": title,
+                "created_at": created_at.isoformat(),
+                "research_enabled": research_enabled,
+                "writer_model": writer_model,
+                "reviewer_model": reviewer_model,
+                "research_model": research_model,
+                "prompt": prompt,
+                "review_path": str(review_path),
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     return Piece(
         slug=slug,
         title=title,
@@ -92,6 +96,13 @@ def save_piece(
         prompt=prompt,
         research_enabled=research_enabled,
     )
+
+
+def load_companion_metadata(path: Path) -> dict[str, str]:
+    metadata_path = metadata_path_for(path)
+    if not metadata_path.exists():
+        return {}
+    return json.loads(metadata_path.read_text(encoding="utf-8"))
 
 
 def parse_frontmatter(markdown: str) -> tuple[dict[str, str], str]:
@@ -131,7 +142,9 @@ def list_pieces(pieces_dir: Path) -> list[PieceSummary]:
     summaries: list[PieceSummary] = []
     for path in sorted(pieces_dir.glob("*.md"), reverse=True):
         raw = path.read_text(encoding="utf-8")
-        metadata, body = parse_frontmatter(raw)
+        metadata = load_companion_metadata(path)
+        legacy_metadata, body = parse_frontmatter(raw)
+        metadata = legacy_metadata | metadata
         created_raw = metadata.get("created_at", datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat())
         created = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
         summaries.append(
@@ -140,7 +153,7 @@ def list_pieces(pieces_dir: Path) -> list[PieceSummary]:
                 title=metadata.get("title") or extract_title(body),
                 created_at=created,
                 path=str(path),
-                research_enabled=metadata.get("research_enabled") == "true",
+                research_enabled=metadata.get("research_enabled") in {True, "true"},
             )
         )
     return summaries
@@ -149,16 +162,22 @@ def list_pieces(pieces_dir: Path) -> list[PieceSummary]:
 def read_piece(pieces_dir: Path, slug: str) -> Piece:
     path = pieces_dir / f"{slug}.md"
     raw = path.read_text(encoding="utf-8")
-    metadata, body = parse_frontmatter(raw)
+    metadata = load_companion_metadata(path)
+    legacy_metadata, body = parse_frontmatter(raw)
+    metadata = legacy_metadata | metadata
     created_raw = metadata.get("created_at", datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat())
     created = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
+    review = metadata.get("review", "")
+    review_path = metadata.get("review_path")
+    if review_path and Path(review_path).exists():
+        review = Path(review_path).read_text(encoding="utf-8").strip()
     return Piece(
         slug=path.stem,
         title=metadata.get("title") or extract_title(body),
         created_at=created,
         path=str(path),
-        markdown=raw,
-        review=metadata.get("review", ""),
+        markdown=body,
+        review=review,
         prompt=metadata.get("prompt", ""),
-        research_enabled=metadata.get("research_enabled") == "true",
+        research_enabled=metadata.get("research_enabled") in {True, "true"},
     )
