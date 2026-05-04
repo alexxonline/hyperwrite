@@ -1,6 +1,6 @@
 import { JSX, render } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { BookOpenText, FileText, FlaskConical, Loader2, Send, Settings2, Sparkles } from "lucide-preact";
+import { BookOpenText, FileText, FlaskConical, Loader2, MessageSquarePlus, RefreshCw, Send, Settings2, Sparkles } from "lucide-preact";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -53,6 +53,7 @@ function formatDate(value: string) {
 function App() {
   const [prompt, setPrompt] = useState("");
   const [style, setStyle] = useState("");
+  const [followupPrompt, setFollowupPrompt] = useState("");
   const [files, setFiles] = useState<FileList | null>(null);
   const [useResearch, setUseResearch] = useState(false);
   const [writerModel, setWriterModel] = useState("");
@@ -63,6 +64,8 @@ function App() {
   const [review, setReview] = useState("");
   const [research, setResearch] = useState("");
   const [loading, setLoading] = useState(false);
+  const [applyingReview, setApplyingReview] = useState(false);
+  const [followingUp, setFollowingUp] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -130,6 +133,79 @@ function App() {
       setError(err instanceof Error ? err.message : "Generation failed.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function applyReviewRewrite() {
+    if (!activePiece || !review.trim()) {
+      setError("Select a piece with reviewer notes first.");
+      return;
+    }
+    setApplyingReview(true);
+    setError("");
+    const form = new FormData();
+    if (reviewerModel.trim()) form.set("reviewer_model", reviewerModel.trim());
+
+    try {
+      const response = await fetch(`${API}/api/pieces/${activePiece.slug}/apply-review`, {
+        method: "POST",
+        body: form,
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null);
+        throw new Error(detail?.detail ?? "Could not apply the review.");
+      }
+      const piece = (await response.json()) as Piece;
+      setActivePiece(piece);
+      setReview(piece.review);
+      setPieces((current) =>
+        current.map((saved) => (saved.slug === piece.slug ? piece : saved)),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not apply the review.");
+    } finally {
+      setApplyingReview(false);
+    }
+  }
+
+  async function applyFollowup(event: Event) {
+    event.preventDefault();
+    if (!activePiece) {
+      setError("Select or generate a piece before adding a follow-up.");
+      return;
+    }
+    if (!followupPrompt.trim()) {
+      setError("Add a follow-up prompt first.");
+      return;
+    }
+    setFollowingUp(true);
+    setError("");
+    setReview("");
+    const form = new FormData();
+    form.set("followup_prompt", followupPrompt.trim());
+    if (writerModel.trim()) form.set("writer_model", writerModel.trim());
+    if (reviewerModel.trim()) form.set("reviewer_model", reviewerModel.trim());
+
+    try {
+      const response = await fetch(`${API}/api/pieces/${activePiece.slug}/follow-up`, {
+        method: "POST",
+        body: form,
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null);
+        throw new Error(detail?.detail ?? "Could not apply the follow-up.");
+      }
+      const piece = (await response.json()) as Piece;
+      setActivePiece(piece);
+      setReview(piece.review);
+      setFollowupPrompt("");
+      setPieces((current) =>
+        current.map((saved) => (saved.slug === piece.slug ? piece : saved)),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not apply the follow-up.");
+    } finally {
+      setFollowingUp(false);
     }
   }
 
@@ -221,6 +297,33 @@ function App() {
               </span>
             )}
           </div>
+          <form
+            className="mb-4 rounded-lg border bg-card p-4 shadow-sm"
+            onSubmit={applyFollowup}
+          >
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <Label htmlFor="followup-prompt" className="flex items-center gap-2">
+                <MessageSquarePlus size={16} /> Follow-up
+              </Label>
+              <Button
+                type="submit"
+                variant="secondary"
+                size="sm"
+                disabled={!activePiece || !followupPrompt.trim() || followingUp}
+              >
+                {followingUp ? <Loader2 className="animate-spin" size={15} /> : <Send size={15} />}
+                Revise
+              </Button>
+            </div>
+            <Textarea
+              id="followup-prompt"
+              value={followupPrompt}
+              onInput={(event: TextareaEvent) => setFollowupPrompt(event.currentTarget.value)}
+              placeholder={activePiece ? "Ask for a sharper lede, shorter ending, more examples..." : "Select or generate a piece first."}
+              disabled={!activePiece || followingUp}
+              className="min-h-24 resize-y"
+            />
+          </form>
           <div className="min-h-[460px] overflow-hidden rounded-lg border bg-card lg:min-h-[760px]">
             <pre className="h-full min-h-[460px] overflow-auto whitespace-pre-wrap p-6 font-mono text-sm leading-6 lg:min-h-[760px]">
               {activePiece?.markdown ?? "Awaiting Markdown."}
@@ -277,8 +380,18 @@ function App() {
           </Card>
 
           <Card>
-            <CardHeader>
+            <CardHeader className="flex-row items-center justify-between gap-3">
               <CardTitle>Reviewer Notes</CardTitle>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={!activePiece || !review.trim() || applyingReview}
+                onClick={applyReviewRewrite}
+              >
+                {applyingReview ? <Loader2 className="animate-spin" size={15} /> : <RefreshCw size={15} />}
+                Apply
+              </Button>
             </CardHeader>
             <CardContent>
               <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-secondary p-3 text-xs leading-5 text-secondary-foreground">

@@ -98,11 +98,84 @@ def save_piece(
     )
 
 
-def load_companion_metadata(path: Path) -> dict[str, str]:
+def load_companion_metadata(path: Path) -> dict:
     metadata_path = metadata_path_for(path)
     if not metadata_path.exists():
         return {}
     return json.loads(metadata_path.read_text(encoding="utf-8"))
+
+
+def _created_at_from_metadata(path: Path, metadata: dict) -> datetime:
+    created_raw = metadata.get(
+        "created_at", datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat()
+    )
+    return datetime.fromisoformat(str(created_raw).replace("Z", "+00:00"))
+
+
+def _read_metadata_and_body(path: Path) -> tuple[dict, str]:
+    raw = path.read_text(encoding="utf-8")
+    metadata = load_companion_metadata(path)
+    legacy_metadata, body = parse_frontmatter(raw)
+    return legacy_metadata | metadata, body
+
+
+def update_piece_markdown(
+    *,
+    pieces_dir: Path,
+    slug: str,
+    markdown: str,
+    reviewer_model: str | None = None,
+    writer_model: str | None = None,
+    review: str | None = None,
+    followup_prompt: str | None = None,
+) -> Piece:
+    path = pieces_dir / f"{slug}.md"
+    metadata, _ = _read_metadata_and_body(path)
+    existing = read_piece(pieces_dir, slug)
+    created_at = _created_at_from_metadata(path, metadata)
+    title, document, _ = build_article_document(markdown=markdown, created_at=created_at)
+    path.write_text(document, encoding="utf-8")
+
+    review_path = metadata.get("review_path") or str(review_path_for(pieces_dir, slug))
+    reviews_dir_for(pieces_dir).mkdir(parents=True, exist_ok=True)
+    next_review = existing.review if review is None else review
+    if next_review.strip():
+        Path(str(review_path)).write_text(next_review.strip() + "\n", encoding="utf-8")
+    followups = list(metadata.get("followups", []))
+    if followup_prompt:
+        followups.append(
+            {
+                "prompt": followup_prompt,
+                "applied_at": datetime.now(UTC).isoformat(),
+                "writer_model": writer_model,
+                "reviewer_model": reviewer_model,
+            }
+        )
+    metadata_without_review = {key: value for key, value in metadata.items() if key != "review"}
+    next_metadata = {
+        **metadata_without_review,
+        "title": title,
+        "created_at": created_at.isoformat(),
+        "research_enabled": existing.research_enabled,
+        "prompt": existing.prompt,
+        "review_path": review_path,
+    }
+    if writer_model:
+        next_metadata["writer_model"] = writer_model
+    if reviewer_model:
+        next_metadata["reviewer_model"] = reviewer_model
+    if followups:
+        next_metadata["followups"] = followups
+    if review is None:
+        next_metadata["review_applied_at"] = datetime.now(UTC).isoformat()
+    else:
+        next_metadata["followup_applied_at"] = datetime.now(UTC).isoformat()
+    metadata_path_for(path).write_text(
+        json.dumps(next_metadata, indent=2)
+        + "\n",
+        encoding="utf-8",
+    )
+    return read_piece(pieces_dir, slug)
 
 
 def parse_frontmatter(markdown: str) -> tuple[dict[str, str], str]:
@@ -141,12 +214,8 @@ def list_pieces(pieces_dir: Path) -> list[PieceSummary]:
         return []
     summaries: list[PieceSummary] = []
     for path in sorted(pieces_dir.glob("*.md"), reverse=True):
-        raw = path.read_text(encoding="utf-8")
-        metadata = load_companion_metadata(path)
-        legacy_metadata, body = parse_frontmatter(raw)
-        metadata = legacy_metadata | metadata
-        created_raw = metadata.get("created_at", datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat())
-        created = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
+        metadata, body = _read_metadata_and_body(path)
+        created = _created_at_from_metadata(path, metadata)
         summaries.append(
             PieceSummary(
                 slug=path.stem,
@@ -161,12 +230,8 @@ def list_pieces(pieces_dir: Path) -> list[PieceSummary]:
 
 def read_piece(pieces_dir: Path, slug: str) -> Piece:
     path = pieces_dir / f"{slug}.md"
-    raw = path.read_text(encoding="utf-8")
-    metadata = load_companion_metadata(path)
-    legacy_metadata, body = parse_frontmatter(raw)
-    metadata = legacy_metadata | metadata
-    created_raw = metadata.get("created_at", datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat())
-    created = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
+    metadata, body = _read_metadata_and_body(path)
+    created = _created_at_from_metadata(path, metadata)
     review = metadata.get("review", "")
     review_path = metadata.get("review_path")
     if review_path and Path(review_path).exists():

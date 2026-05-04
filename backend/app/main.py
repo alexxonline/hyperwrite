@@ -6,9 +6,9 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import Settings, get_settings
-from .graph import build_graph
+from .graph import apply_followup_revision, apply_review_rewrite, build_graph
 from .models import GenerationResponse, ModelDefaults, Piece, PieceSummary
-from .storage import list_pieces, read_piece, save_piece
+from .storage import list_pieces, read_piece, save_piece, update_piece_markdown
 
 
 app = FastAPI(title="Hyperwrite API")
@@ -77,6 +77,79 @@ async def get_piece(slug: str, settings: Settings = Depends(get_settings)) -> Pi
         return read_piece(settings.pieces_dir, slug)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Piece not found.") from exc
+
+
+@app.post("/api/pieces/{slug}/apply-review", response_model=Piece)
+async def apply_piece_review(
+    slug: str,
+    reviewer_model: str | None = Form(None),
+    settings: Settings = Depends(get_settings),
+) -> Piece:
+    try:
+        piece = read_piece(settings.pieces_dir, slug)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Piece not found.") from exc
+    if not piece.review.strip():
+        raise HTTPException(status_code=400, detail="This piece does not have review notes to apply.")
+
+    chosen_reviewer = reviewer_model or settings.reviewer_model
+    try:
+        rewritten = await apply_review_rewrite(
+            settings=settings,
+            article_markdown=piece.markdown,
+            review=piece.review,
+            prompt=piece.prompt,
+            reviewer_model=chosen_reviewer,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return update_piece_markdown(
+        pieces_dir=settings.pieces_dir,
+        slug=slug,
+        markdown=rewritten,
+        reviewer_model=chosen_reviewer,
+    )
+
+
+@app.post("/api/pieces/{slug}/follow-up", response_model=Piece)
+async def apply_piece_followup(
+    slug: str,
+    followup_prompt: str = Form(...),
+    writer_model: str | None = Form(None),
+    reviewer_model: str | None = Form(None),
+    settings: Settings = Depends(get_settings),
+) -> Piece:
+    if not followup_prompt.strip():
+        raise HTTPException(status_code=400, detail="Follow-up prompt is required.")
+    try:
+        piece = read_piece(settings.pieces_dir, slug)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Piece not found.") from exc
+
+    chosen_writer = writer_model or settings.writer_model
+    chosen_reviewer = reviewer_model or settings.reviewer_model
+    try:
+        final_markdown, review = await apply_followup_revision(
+            settings=settings,
+            article_markdown=piece.markdown,
+            original_prompt=piece.prompt,
+            followup_prompt=followup_prompt.strip(),
+            writer_model=chosen_writer,
+            reviewer_model=chosen_reviewer,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return update_piece_markdown(
+        pieces_dir=settings.pieces_dir,
+        slug=slug,
+        markdown=final_markdown,
+        writer_model=chosen_writer,
+        reviewer_model=chosen_reviewer,
+        review=review,
+        followup_prompt=followup_prompt.strip(),
+    )
 
 
 @app.post("/api/pieces", response_model=GenerationResponse)

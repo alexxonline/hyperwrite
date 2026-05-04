@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -38,19 +39,26 @@ def _chat(settings: Settings, model: str, temperature: float = 0.4) -> ChatOpenA
     )
 
 
+def _current_date_context() -> str:
+    return datetime.now(UTC).date().isoformat()
+
+
 async def research_node(state: WritingState, settings: Settings) -> WritingState:
     llm = _chat(settings, state["research_model"], temperature=0.2)
+    current_date = _current_date_context()
     response = await llm.ainvoke(
         [
             SystemMessage(
                 content=(
                     "You are a research agent. Use current sources available to you and "
                     "return concise, cited research notes in Markdown. Focus on facts, "
-                    "competing viewpoints, key examples, and source URLs."
+                    "competing viewpoints, key examples, and source URLs. "
+                    f"Current date: {current_date}."
                 )
             ),
             HumanMessage(
                 content=(
+                    f"Current date: {current_date}\n\n"
                     f"Research this writing assignment:\n\n{state['prompt']}\n\n"
                     f"Source material supplied by the user:\n{state.get('source_documents', '')}"
                 )
@@ -62,16 +70,19 @@ async def research_node(state: WritingState, settings: Settings) -> WritingState
 
 async def write_node(state: WritingState, settings: Settings) -> WritingState:
     llm = _chat(settings, state["writer_model"], temperature=0.65)
+    current_date = _current_date_context()
     response = await llm.ainvoke(
         [
             SystemMessage(
                 content=(
                     "You are a senior writing agent. Produce a polished written piece in Markdown. "
-                    "Start with a single H1 title. Use clear structure, strong prose, and no process notes."
+                    "Start with a single H1 title. Use clear structure, strong prose, and no process notes. "
+                    f"Current date: {current_date}."
                 )
             ),
             HumanMessage(
                 content=(
+                    f"Current date: {current_date}\n\n"
                     f"Assignment:\n{state['prompt']}\n\n"
                     f"Style or constraints:\n{state.get('style') or 'No extra style constraints.'}\n\n"
                     f"User source material:\n{state.get('source_documents') or 'No source files provided.'}\n\n"
@@ -85,17 +96,28 @@ async def write_node(state: WritingState, settings: Settings) -> WritingState:
 
 async def review_node(state: WritingState, settings: Settings) -> WritingState:
     llm = _chat(settings, state["reviewer_model"], temperature=0.15)
+    current_date = _current_date_context()
     response = await llm.ainvoke(
         [
             SystemMessage(
                 content=(
                     "You are a demanding editorial reviewer. Review the draft for accuracy, "
                     "structure, clarity, completeness, unsupported claims, and fit to prompt. "
-                    "Return actionable revision notes in Markdown. Do not rewrite the whole piece."
+                    "Return actionable revision notes in Markdown. Do not rewrite the whole piece.\n\n"
+                    f"Current date: {current_date}. Your model training cutoff may be earlier than "
+                    "this date. Do not mark an event date, product release date, company claim, "
+                    "market estimate, or current-year reference as inaccurate merely because it is "
+                    "newer than your training data or feels unfamiliar. Only flag a date or recent "
+                    "fact as inaccurate if it conflicts with the provided research notes, conflicts "
+                    "with user-supplied source material, conflicts internally with another statement "
+                    "in the draft, or is impossible relative to the current date above. When evidence "
+                    "is insufficient, ask for citation or verification instead of asserting the date "
+                    "is wrong."
                 )
             ),
             HumanMessage(
                 content=(
+                    f"Current date: {current_date}\n\n"
                     f"Prompt:\n{state['prompt']}\n\n"
                     f"Research notes:\n{state.get('research') or 'None.'}\n\n"
                     f"Draft:\n{state['draft']}"
@@ -108,16 +130,19 @@ async def review_node(state: WritingState, settings: Settings) -> WritingState:
 
 async def revise_node(state: WritingState, settings: Settings) -> WritingState:
     llm = _chat(settings, state["writer_model"], temperature=0.45)
+    current_date = _current_date_context()
     response = await llm.ainvoke(
         [
             SystemMessage(
                 content=(
                     "You are the writing agent revising after editorial review. "
-                    "Return only the final Markdown piece. It must begin with one H1 title."
+                    "Return only the final Markdown piece. It must begin with one H1 title. "
+                    f"Current date: {current_date}."
                 )
             ),
             HumanMessage(
                 content=(
+                    f"Current date: {current_date}\n\n"
                     f"Original prompt:\n{state['prompt']}\n\n"
                     f"Draft:\n{state['draft']}\n\n"
                     f"Reviewer notes:\n{state['review']}\n\n"
@@ -127,6 +152,129 @@ async def revise_node(state: WritingState, settings: Settings) -> WritingState:
         ]
     )
     return {"final": str(response.content)}
+
+
+async def apply_review_rewrite(
+    *,
+    settings: Settings,
+    article_markdown: str,
+    review: str,
+    prompt: str,
+    reviewer_model: str,
+) -> str:
+    llm = _chat(settings, reviewer_model, temperature=0.35)
+    current_date = _current_date_context()
+    response = await llm.ainvoke(
+        [
+            SystemMessage(
+                content=(
+                    "You are the reviewer model applying your editorial review. Rewrite the "
+                    "article so it directly addresses the review notes. Return only the clean "
+                    "final article in Markdown. Do not include review notes, explanations, "
+                    "change logs, metadata, or frontmatter. The result must begin with one H1 title.\n\n"
+                    f"Current date: {current_date}. Your model training cutoff may be earlier than "
+                    "this date. If the review notes claim a recent date or current-year fact is "
+                    "wrong solely because it is newer than the model's knowledge, ignore that part "
+                    "of the review. Apply date corrections only when the article contradicts itself, "
+                    "contradicts the original prompt, or contradicts supplied research/source material."
+                )
+            ),
+            HumanMessage(
+                content=(
+                    f"Current date: {current_date}\n\n"
+                    f"Original prompt:\n{prompt or 'No prompt was stored.'}\n\n"
+                    f"Current article Markdown:\n{article_markdown}\n\n"
+                    f"Reviewer notes to apply:\n{review}"
+                )
+            ),
+        ]
+    )
+    return str(response.content).strip()
+
+
+async def apply_followup_revision(
+    *,
+    settings: Settings,
+    article_markdown: str,
+    original_prompt: str,
+    followup_prompt: str,
+    writer_model: str,
+    reviewer_model: str,
+) -> tuple[str, str]:
+    current_date = _current_date_context()
+    writer = _chat(settings, writer_model, temperature=0.5)
+    draft_response = await writer.ainvoke(
+        [
+            SystemMessage(
+                content=(
+                    "You are a senior writing agent revising an existing Markdown article. "
+                    "Apply the user's follow-up request to the whole piece. Preserve useful "
+                    "structure and prose, but make whatever changes the follow-up requires. "
+                    "Return only the revised article Markdown, beginning with one H1 title. "
+                    f"Current date: {current_date}."
+                )
+            ),
+            HumanMessage(
+                content=(
+                    f"Current date: {current_date}\n\n"
+                    f"Original assignment:\n{original_prompt or 'No original prompt was stored.'}\n\n"
+                    f"Current article Markdown:\n{article_markdown}\n\n"
+                    f"Follow-up request:\n{followup_prompt}"
+                )
+            ),
+        ]
+    )
+    draft = str(draft_response.content).strip()
+
+    reviewer = _chat(settings, reviewer_model, temperature=0.15)
+    review_response = await reviewer.ainvoke(
+        [
+            SystemMessage(
+                content=(
+                    "You are a demanding editorial reviewer. Review whether the revised draft "
+                    "faithfully applies the follow-up request while preserving quality, accuracy, "
+                    "structure, and fit to the original assignment. Return actionable revision "
+                    "notes in Markdown. Do not rewrite the whole piece.\n\n"
+                    f"Current date: {current_date}. Your model training cutoff may be earlier than "
+                    "this date. Do not mark a current or recent fact as inaccurate merely because it "
+                    "is newer than your training data or feels unfamiliar. Only flag date issues when "
+                    "they conflict with the supplied article, prompt, follow-up request, or current date."
+                )
+            ),
+            HumanMessage(
+                content=(
+                    f"Current date: {current_date}\n\n"
+                    f"Original assignment:\n{original_prompt or 'No original prompt was stored.'}\n\n"
+                    f"Follow-up request:\n{followup_prompt}\n\n"
+                    f"Revised draft:\n{draft}"
+                )
+            ),
+        ]
+    )
+    review = str(review_response.content).strip()
+
+    final_response = await writer.ainvoke(
+        [
+            SystemMessage(
+                content=(
+                    "You are a senior writing agent finalizing a Markdown article after editorial "
+                    "review. Apply the reviewer notes that are relevant to the user's follow-up "
+                    "request. Return only the clean final article Markdown, beginning with one H1 "
+                    f"title. Current date: {current_date}."
+                )
+            ),
+            HumanMessage(
+                content=(
+                    f"Current date: {current_date}\n\n"
+                    f"Original assignment:\n{original_prompt or 'No original prompt was stored.'}\n\n"
+                    f"Follow-up request:\n{followup_prompt}\n\n"
+                    f"Draft:\n{draft}\n\n"
+                    f"Reviewer notes:\n{review}"
+                )
+            ),
+        ]
+    )
+    return str(final_response.content).strip(), review
 
 
 def _route_research(state: WritingState) -> str:
