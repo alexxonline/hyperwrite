@@ -11,6 +11,7 @@ A local writing studio with a FastAPI backend, Preact frontend, shadcn/ui-style 
 - Draft with a writer agent, review with a reviewer agent, and revise before presenting.
 - Optionally add a research agent that uses Perplexity through OpenRouter.
 - Optionally apply the bundled anti-AI writing style guide for more direct, human-sounding prose.
+- Anti AI Style guide by  https://ruben.substack.com/
 
 ## Setup
 

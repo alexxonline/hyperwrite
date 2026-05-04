@@ -1,6 +1,6 @@
 import { JSX, render } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { BookOpenText, FileText, FlaskConical, Loader2, MessageSquarePlus, RefreshCw, Send, Settings2, Sparkles, Trash2 } from "lucide-preact";
+import { ArrowLeft, BookOpenText, FileText, FlaskConical, Loader2, MessageSquarePlus, RefreshCw, Search, Send, Settings2, Sparkles, Trash2 } from "lucide-preact";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -38,9 +38,19 @@ type ModelDefaults = {
 };
 
 const API = import.meta.env.VITE_API_URL ?? "";
+const SAVED_ROUTE = "/saved";
 
 type InputEvent = JSX.TargetedEvent<HTMLInputElement, Event>;
 type TextareaEvent = JSX.TargetedEvent<HTMLTextAreaElement, Event>;
+type View = "desk" | "saved";
+
+function viewFromPath(): View {
+  return window.location.pathname === SAVED_ROUTE ? "saved" : "desk";
+}
+
+function pathForView(view: View) {
+  return view === "saved" ? SAVED_ROUTE : "/";
+}
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat(undefined, {
@@ -65,12 +75,17 @@ function App() {
   const [activePiece, setActivePiece] = useState<Piece | null>(null);
   const [review, setReview] = useState("");
   const [research, setResearch] = useState("");
+  const [view, setView] = useState<View>(() => viewFromPath());
+  const [savedSearch, setSavedSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [applyingReview, setApplyingReview] = useState(false);
   const [followingUp, setFollowingUp] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    const syncViewToLocation = () => setView(viewFromPath());
+    window.addEventListener("popstate", syncViewToLocation);
+
     fetch(`${API}/api/config/models`)
       .then((response) => response.json())
       .then((defaults: ModelDefaults) => {
@@ -84,9 +99,25 @@ function App() {
       .then((response) => response.json())
       .then(setPieces)
       .catch(() => setError("Could not load saved pieces."));
+
+    return () => window.removeEventListener("popstate", syncViewToLocation);
   }, []);
 
   const fileNames = useMemo(() => Array.from(files ?? []).map((file) => file.name), [files]);
+  const latestSavedPieces = useMemo(() => pieces.slice(0, 3), [pieces]);
+  const filteredSavedPieces = useMemo(() => {
+    const query = savedSearch.trim().toLowerCase();
+    if (!query) return pieces;
+    return pieces.filter((piece) => piece.title.toLowerCase().includes(query));
+  }, [pieces, savedSearch]);
+
+  function navigateToView(nextView: View) {
+    const nextPath = pathForView(nextView);
+    if (window.location.pathname !== nextPath) {
+      window.history.pushState({}, "", nextPath);
+    }
+    setView(nextView);
+  }
 
   async function loadPiece(slug: string) {
     setError("");
@@ -100,6 +131,7 @@ function App() {
     setReview(piece.review);
     setResearch("");
     setUseAntiAiStyle(piece.anti_ai_style_enabled);
+    navigateToView("desk");
   }
 
   async function generatePiece(event: Event) {
@@ -236,6 +268,107 @@ function App() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not delete that piece.");
     }
+  }
+
+  if (view === "saved") {
+    return (
+      <main className="min-h-screen bg-background text-foreground">
+        <section className="mx-auto flex max-w-[1120px] flex-col gap-5 px-5 py-5">
+          <header className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                aria-label="Back to writing desk"
+                onClick={() => navigateToView("desk")}
+              >
+                <ArrowLeft size={18} />
+              </Button>
+              <div>
+                <p className="text-sm text-muted-foreground">Saved files</p>
+                <h1 className="text-3xl font-semibold tracking-normal">All saved pieces</h1>
+              </div>
+            </div>
+            <span className="rounded-md border bg-secondary px-3 py-1 text-sm text-secondary-foreground">
+              {pieces.length} {pieces.length === 1 ? "file" : "files"}
+            </span>
+          </header>
+
+          <div className="relative">
+            <Search
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+              size={17}
+            />
+            <Input
+              value={savedSearch}
+              onInput={(event: InputEvent) => setSavedSearch(event.currentTarget.value)}
+              placeholder="Search by title"
+              className="h-12 pl-10"
+              aria-label="Search saved files by title"
+            />
+          </div>
+          {error && (
+            <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+              {error}
+            </p>
+          )}
+
+          <div className="rounded-lg border bg-card shadow-sm">
+            <div className="grid grid-cols-[1fr_auto_auto] gap-3 border-b px-4 py-3 text-xs font-medium uppercase tracking-normal text-muted-foreground">
+              <span>Title</span>
+              <span className="hidden sm:block">Created</span>
+              <span>Action</span>
+            </div>
+            <div className="divide-y">
+              {filteredSavedPieces.length === 0 && (
+                <p className="px-4 py-8 text-sm text-muted-foreground">
+                  {pieces.length === 0 ? "No saved pieces yet." : "No saved titles match that search."}
+                </p>
+              )}
+              {filteredSavedPieces.map((piece) => (
+                <div
+                  key={piece.slug}
+                  className="grid grid-cols-[1fr_auto] items-center gap-3 px-4 py-3 transition-colors hover:bg-accent sm:grid-cols-[1fr_160px_auto]"
+                >
+                  <button
+                    className="min-w-0 text-left"
+                    type="button"
+                    onClick={() => loadPiece(piece.slug)}
+                  >
+                    <span className="block truncate text-sm font-medium">{piece.title}</span>
+                    <span className="mt-1 block truncate text-xs text-muted-foreground">{piece.path}</span>
+                  </button>
+                  <span className="hidden text-sm text-muted-foreground sm:block">
+                    {formatDate(piece.created_at)}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => loadPiece(piece.slug)}
+                    >
+                      <FileText size={15} />
+                      Open
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      aria-label={`Delete ${piece.title}`}
+                      onClick={() => deletePiece(piece)}
+                    >
+                      <Trash2 size={16} />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      </main>
+    );
   }
 
   return (
@@ -394,21 +527,30 @@ function App() {
           </Card>
 
           <Card>
-            <CardHeader>
+            <CardHeader className="flex-row items-center justify-between gap-3">
               <CardTitle className="flex items-center gap-2">
                 <FileText size={18} /> Saved
               </CardTitle>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => navigateToView("saved")}
+              >
+                View all
+              </Button>
             </CardHeader>
             <CardContent className="max-h-80 overflow-auto">
               <div className="flex flex-col gap-2">
                 {pieces.length === 0 && <p className="text-sm text-muted-foreground">No saved pieces yet.</p>}
-                {pieces.map((piece) => (
+                {latestSavedPieces.map((piece) => (
                   <div
                     key={piece.slug}
                     className="group grid grid-cols-[1fr_40px] overflow-hidden rounded-md border bg-background transition-colors hover:bg-accent"
                   >
                     <button
                       className="min-w-0 p-3 text-left"
+                      type="button"
                       onClick={() => loadPiece(piece.slug)}
                     >
                       <span className="block text-sm font-medium">{piece.title}</span>
