@@ -23,6 +23,12 @@ class GenerationResponse(BaseModel):
     research: str = ""
 
 
+class ModelDefaults(BaseModel):
+    writer_model: str
+    reviewer_model: str
+    research_model: str
+
+
 class GenerationOptions(BaseModel):
     prompt: str = Field(min_length=1)
     use_research: bool = False

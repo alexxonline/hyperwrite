@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import Settings, get_settings
 from .graph import build_graph
-from .models import GenerationResponse, Piece, PieceSummary
+from .models import GenerationResponse, ModelDefaults, Piece, PieceSummary
 from .storage import list_pieces, read_piece, save_piece
 
 
@@ -55,6 +55,15 @@ async def _read_uploads(files: list[UploadFile] | None) -> str:
 @app.get("/healthz")
 async def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/config/models", response_model=ModelDefaults)
+async def get_model_defaults(settings: Settings = Depends(get_settings)) -> ModelDefaults:
+    return ModelDefaults(
+        writer_model=settings.writer_model,
+        reviewer_model=settings.reviewer_model,
+        research_model=settings.research_model,
+    )
 
 
 @app.get("/api/pieces", response_model=list[PieceSummary])

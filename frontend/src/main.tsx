@@ -30,6 +30,12 @@ type GenerationResponse = {
   research: string;
 };
 
+type ModelDefaults = {
+  writer_model: string;
+  reviewer_model: string;
+  research_model: string;
+};
+
 const API = import.meta.env.VITE_API_URL ?? "";
 
 type InputEvent = JSX.TargetedEvent<HTMLInputElement, Event>;
@@ -49,9 +55,9 @@ function App() {
   const [style, setStyle] = useState("");
   const [files, setFiles] = useState<FileList | null>(null);
   const [useResearch, setUseResearch] = useState(false);
-  const [writerModel, setWriterModel] = useState("openai/gpt-5");
-  const [reviewerModel, setReviewerModel] = useState("anthropic/claude-sonnet-4.5");
-  const [researchModel, setResearchModel] = useState("perplexity/sonar-pro-search");
+  const [writerModel, setWriterModel] = useState("");
+  const [reviewerModel, setReviewerModel] = useState("");
+  const [researchModel, setResearchModel] = useState("");
   const [pieces, setPieces] = useState<PieceSummary[]>([]);
   const [activePiece, setActivePiece] = useState<Piece | null>(null);
   const [review, setReview] = useState("");
@@ -60,6 +66,15 @@ function App() {
   const [error, setError] = useState("");
 
   useEffect(() => {
+    fetch(`${API}/api/config/models`)
+      .then((response) => response.json())
+      .then((defaults: ModelDefaults) => {
+        setWriterModel(defaults.writer_model);
+        setReviewerModel(defaults.reviewer_model);
+        setResearchModel(defaults.research_model);
+      })
+      .catch(() => setError("Could not load backend model defaults."));
+
     fetch(`${API}/api/pieces`)
       .then((response) => response.json())
       .then(setPieces)
@@ -95,9 +110,9 @@ function App() {
     form.set("prompt", prompt);
     form.set("style", style);
     form.set("use_research", String(useResearch));
-    form.set("writer_model", writerModel);
-    form.set("reviewer_model", reviewerModel);
-    form.set("research_model", researchModel);
+    if (writerModel.trim()) form.set("writer_model", writerModel.trim());
+    if (reviewerModel.trim()) form.set("reviewer_model", reviewerModel.trim());
+    if (researchModel.trim()) form.set("research_model", researchModel.trim());
     Array.from(files ?? []).forEach((file) => form.append("files", file));
 
     try {
