@@ -3,6 +3,7 @@
 @tailwind utilities;
 
 :root {
+  color-scheme: light;
   --background: 168 12% 96%;
   --foreground: 210 18% 13%;
   --card: 0 0% 100%;
@@ -23,6 +24,29 @@
   --radius: 0.5rem;
 }
 
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --background: 204 18% 9%;
+    --foreground: 170 18% 92%;
+    --card: 204 20% 12%;
+    --card-foreground: 170 18% 92%;
+    --primary: 171 72% 42%;
+    --primary-foreground: 204 26% 8%;
+    --secondary: 202 18% 18%;
+    --secondary-foreground: 170 16% 88%;
+    --muted: 203 15% 21%;
+    --muted-foreground: 176 9% 66%;
+    --accent: 14 48% 24%;
+    --accent-foreground: 18 82% 91%;
+    --destructive: 0 72% 57%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 202 16% 28%;
+    --input: 202 16% 28%;
+    --ring: 171 72% 42%;
+  }
+}
+
 * {
   box-sizing: border-box;
 }
@@ -35,6 +59,15 @@ body {
     radial-gradient(circle at 12% 0%, rgba(13, 148, 136, 0.16), transparent 24%),
     hsl(var(--background));
   font-family: Aptos, Söhne, ui-sans-serif, system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    background:
+      linear-gradient(135deg, rgba(20, 184, 166, 0.09), rgba(20, 184, 166, 0) 38%),
+      radial-gradient(circle at 12% 0%, rgba(251, 146, 60, 0.13), transparent 25%),
+      hsl(var(--background));
+  }
 }
 
 button,
