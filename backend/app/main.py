@@ -184,6 +184,7 @@ async def create_piece(
     files: list[UploadFile] | None = File(None),
     settings: Settings = Depends(get_settings),
 ) -> GenerationResponse:
+    source_file_names = [uploaded.filename or "untitled" for uploaded in files or []]
     source_documents = await _read_uploads(files)
     chosen_writer = writer_model or settings.writer_model
     chosen_reviewer = reviewer_model or settings.reviewer_model
@@ -213,6 +214,8 @@ async def create_piece(
         pieces_dir=settings.pieces_dir,
         markdown=final_markdown,
         prompt=prompt,
+        style=style,
+        source_files=source_file_names,
         review=result.get("review", ""),
         research_enabled=use_research,
         anti_ai_style_enabled=use_anti_ai_style,

@@ -16,6 +16,11 @@ class Piece(PieceSummary):
     markdown: str
     review: str = ""
     prompt: str = ""
+    style: str = ""
+    source_files: list[str] = Field(default_factory=list)
+    writer_model: str = ""
+    reviewer_model: str = ""
+    research_model: str = ""
 
 
 class GenerationResponse(BaseModel):

@@ -1,6 +1,6 @@
 import { JSX, render } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { ArrowLeft, BookOpenText, FileText, FlaskConical, Loader2, MessageSquarePlus, RefreshCw, Search, Send, Settings2, Sparkles, Trash2 } from "lucide-preact";
+import { ArrowLeft, BookOpenText, Code2, Eye, FileText, FlaskConical, Loader2, MessageSquarePlus, RefreshCw, Search, Send, Settings2, Sparkles, Trash2 } from "lucide-preact";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,6 +23,11 @@ type Piece = PieceSummary & {
   markdown: string;
   review: string;
   prompt: string;
+  style: string;
+  source_files: string[];
+  writer_model: string;
+  reviewer_model: string;
+  research_model: string;
 };
 
 type GenerationResponse = {
@@ -61,6 +66,181 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
+function safeHref(value: string) {
+  if (/^(https?:|mailto:|#|\/)/i.test(value)) return value;
+  return "#";
+}
+
+function renderInline(text: string, keyPrefix: string): Array<string | JSX.Element> {
+  return text
+    .split(/(`[^`]+`|\[[^\]]+\]\([^)]+\)|\*\*[^*]+\*\*|\*[^*]+\*)/g)
+    .filter(Boolean)
+    .map((part, index) => {
+      const key = `${keyPrefix}-${index}`;
+      const link = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+      if (link) {
+        const href = safeHref(link[2].trim());
+        return (
+          <a
+            key={key}
+            className="font-medium text-primary underline underline-offset-4"
+            href={href}
+            rel={href.startsWith("http") ? "noreferrer" : undefined}
+            target={href.startsWith("http") ? "_blank" : undefined}
+          >
+            {link[1]}
+          </a>
+        );
+      }
+      if (part.startsWith("`") && part.endsWith("`")) {
+        return (
+          <code key={key} className="rounded bg-secondary px-1 py-0.5 font-mono text-[0.9em]">
+            {part.slice(1, -1)}
+          </code>
+        );
+      }
+      if (part.startsWith("**") && part.endsWith("**")) {
+        return <strong key={key}>{renderInline(part.slice(2, -2), key)}</strong>;
+      }
+      if (part.startsWith("*") && part.endsWith("*")) {
+        return <em key={key}>{renderInline(part.slice(1, -1), key)}</em>;
+      }
+      return part;
+    });
+}
+
+function isMarkdownBlockStart(line: string) {
+  return (
+    /^#{1,6}\s+/.test(line) ||
+    /^>\s?/.test(line) ||
+    /^\s*[-*+]\s+/.test(line) ||
+    /^\s*\d+\.\s+/.test(line) ||
+    /^```/.test(line) ||
+    /^ {0,3}(-{3,}|\*{3,}|_{3,})\s*$/.test(line)
+  );
+}
+
+function renderHeading(level: number, text: string, key: string) {
+  const content = renderInline(text, key);
+  const className = "font-semibold tracking-normal text-foreground";
+  if (level === 1) return <h1 key={key} className={`${className} text-3xl leading-tight`}>{content}</h1>;
+  if (level === 2) return <h2 key={key} className={`${className} text-2xl leading-tight`}>{content}</h2>;
+  if (level === 3) return <h3 key={key} className={`${className} text-xl leading-snug`}>{content}</h3>;
+  if (level === 4) return <h4 key={key} className={`${className} text-lg leading-snug`}>{content}</h4>;
+  if (level === 5) return <h5 key={key} className={`${className} text-base leading-snug`}>{content}</h5>;
+  return <h6 key={key} className={`${className} text-sm leading-snug`}>{content}</h6>;
+}
+
+function MarkdownPreview({ markdown }: { markdown: string }) {
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  const blocks: JSX.Element[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    const key = `md-${index}`;
+
+    if (!line.trim()) {
+      index += 1;
+      continue;
+    }
+
+    if (line.startsWith("```")) {
+      const language = line.slice(3).trim();
+      const code: string[] = [];
+      index += 1;
+      while (index < lines.length && !lines[index].startsWith("```")) {
+        code.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      blocks.push(
+        <pre key={key} className="overflow-auto rounded-md bg-secondary p-4 font-mono text-sm leading-6 text-secondary-foreground">
+          <code aria-label={language ? `${language} code block` : undefined}>{code.join("\n")}</code>
+        </pre>,
+      );
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      blocks.push(renderHeading(heading[1].length, heading[2], key));
+      index += 1;
+      continue;
+    }
+
+    if (/^ {0,3}(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      blocks.push(<hr key={key} className="border-border" />);
+      index += 1;
+      continue;
+    }
+
+    if (/^>\s?/.test(line)) {
+      const quote: string[] = [];
+      while (index < lines.length && /^>\s?/.test(lines[index])) {
+        quote.push(lines[index].replace(/^>\s?/, ""));
+        index += 1;
+      }
+      blocks.push(
+        <blockquote key={key} className="border-l-4 border-primary/40 pl-4 text-muted-foreground">
+          {quote.map((quoteLine, quoteIndex) => (
+            <p key={`${key}-${quoteIndex}`} className={quoteIndex > 0 ? "mt-2" : undefined}>
+              {renderInline(quoteLine, `${key}-${quoteIndex}`)}
+            </p>
+          ))}
+        </blockquote>,
+      );
+      continue;
+    }
+
+    if (/^\s*[-*+]\s+/.test(line)) {
+      const items: string[] = [];
+      while (index < lines.length && /^\s*[-*+]\s+/.test(lines[index])) {
+        items.push(lines[index].replace(/^\s*[-*+]\s+/, ""));
+        index += 1;
+      }
+      blocks.push(
+        <ul key={key} className="list-disc space-y-2 pl-6">
+          {items.map((item, itemIndex) => <li key={`${key}-${itemIndex}`}>{renderInline(item, `${key}-${itemIndex}`)}</li>)}
+        </ul>,
+      );
+      continue;
+    }
+
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const items: string[] = [];
+      while (index < lines.length && /^\s*\d+\.\s+/.test(lines[index])) {
+        items.push(lines[index].replace(/^\s*\d+\.\s+/, ""));
+        index += 1;
+      }
+      blocks.push(
+        <ol key={key} className="list-decimal space-y-2 pl-6">
+          {items.map((item, itemIndex) => <li key={`${key}-${itemIndex}`}>{renderInline(item, `${key}-${itemIndex}`)}</li>)}
+        </ol>,
+      );
+      continue;
+    }
+
+    const paragraph: string[] = [line.trim()];
+    index += 1;
+    while (index < lines.length && lines[index].trim() && !isMarkdownBlockStart(lines[index])) {
+      paragraph.push(lines[index].trim());
+      index += 1;
+    }
+    blocks.push(
+      <p key={key} className="leading-7">
+        {renderInline(paragraph.join(" "), key)}
+      </p>,
+    );
+  }
+
+  return (
+    <article className="flex h-full min-h-[620px] flex-col gap-5 overflow-auto p-6 text-base leading-7 sm:p-8 lg:min-h-[780px]">
+      {blocks.length > 0 ? blocks : <p className="text-muted-foreground">No markdown generated yet.</p>}
+    </article>
+  );
+}
+
 function App() {
   const [prompt, setPrompt] = useState("");
   const [style, setStyle] = useState("");
@@ -80,6 +260,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [applyingReview, setApplyingReview] = useState(false);
   const [followingUp, setFollowingUp] = useState(false);
+  const [showMarkdownPreview, setShowMarkdownPreview] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -181,7 +362,8 @@ function App() {
     setApplyingReview(true);
     setError("");
     const form = new FormData();
-    if (reviewerModel.trim()) form.set("reviewer_model", reviewerModel.trim());
+    const selectedReviewerModel = activePiece.reviewer_model || reviewerModel;
+    if (selectedReviewerModel.trim()) form.set("reviewer_model", selectedReviewerModel.trim());
     form.set("use_anti_ai_style", String(useAntiAiStyle));
 
     try {
@@ -222,8 +404,10 @@ function App() {
     const form = new FormData();
     form.set("followup_prompt", followupPrompt.trim());
     form.set("use_anti_ai_style", String(useAntiAiStyle));
-    if (writerModel.trim()) form.set("writer_model", writerModel.trim());
-    if (reviewerModel.trim()) form.set("reviewer_model", reviewerModel.trim());
+    const selectedWriterModel = activePiece.writer_model || writerModel;
+    const selectedReviewerModel = activePiece.reviewer_model || reviewerModel;
+    if (selectedWriterModel.trim()) form.set("writer_model", selectedWriterModel.trim());
+    if (selectedReviewerModel.trim()) form.set("reviewer_model", selectedReviewerModel.trim());
 
     try {
       const response = await fetch(`${API}/api/pieces/${activePiece.slug}/follow-up`, {
@@ -371,13 +555,52 @@ function App() {
     );
   }
 
-  return (
-    <main className="min-h-screen bg-background text-foreground">
-      <section className="mx-auto grid max-w-[1500px] gap-6 px-5 py-5 lg:grid-cols-[390px_1fr_340px]">
-        <aside className="flex flex-col gap-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-md bg-primary text-primary-foreground">
-              <BookOpenText size={22} />
+  const savedPanel = (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between gap-3">
+        <CardTitle className="flex items-center gap-2">
+          <FileText size={18} /> Saved
+        </CardTitle>
+        <Button type="button" variant="secondary" size="sm" onClick={() => navigateToView("saved")}>
+          View all
+        </Button>
+      </CardHeader>
+      <CardContent className="max-h-80 overflow-auto">
+        <div className="flex flex-col gap-2">
+          {pieces.length === 0 && <p className="text-sm text-muted-foreground">No saved pieces yet.</p>}
+          {latestSavedPieces.map((piece) => (
+            <div
+              key={piece.slug}
+              className="group grid grid-cols-[1fr_40px] overflow-hidden rounded-md border bg-background transition-colors hover:bg-accent"
+            >
+              <button className="min-w-0 p-3 text-left" type="button" onClick={() => loadPiece(piece.slug)}>
+                <span className="block text-sm font-medium">{piece.title}</span>
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  {formatDate(piece.created_at)} {piece.research_enabled ? "with research" : ""}
+                </span>
+              </button>
+              <button
+                aria-label={`Delete ${piece.title}`}
+                className="flex items-center justify-center border-l text-muted-foreground transition-colors hover:bg-destructive hover:text-destructive-foreground"
+                onClick={() => deletePiece(piece)}
+                type="button"
+              >
+                <Trash2 size={16} />
+              </button>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+
+  if (!activePiece) {
+    return (
+      <main className="min-h-screen bg-background text-foreground">
+        <section className="mx-auto flex max-w-[760px] flex-col gap-5 px-5 py-6">
+          <div className="flex items-center justify-center gap-3 pb-1">
+            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-primary text-primary-foreground">
+              <BookOpenText size={21} />
             </div>
             <div>
               <h1 className="text-2xl font-semibold tracking-normal">Hyperwrite</h1>
@@ -400,7 +623,7 @@ function App() {
                     value={prompt}
                     onInput={(event: TextareaEvent) => setPrompt(event.currentTarget.value)}
                     placeholder="Write a sharp, evidence-led essay about..."
-                    className="min-h-44 resize-y"
+                    className="min-h-52 resize-y"
                   />
                 </div>
                 <div className="space-y-2">
@@ -425,85 +648,41 @@ function App() {
                     <p className="text-xs text-muted-foreground">{fileNames.join(", ")}</p>
                   )}
                 </div>
-                <div className="flex items-center justify-between rounded-md border bg-secondary/60 px-3 py-2">
-                  <Label htmlFor="research" className="flex items-center gap-2">
-                    <FlaskConical size={16} /> Research
-                  </Label>
-                  <Switch
-                    id="research"
-                    checked={useResearch}
-                    onChange={(event: InputEvent) => setUseResearch(event.currentTarget.checked)}
-                  />
-                </div>
-                <div className="flex items-center justify-between rounded-md border bg-secondary/60 px-3 py-2">
-                  <Label htmlFor="anti-ai-style" className="flex items-center gap-2">
-                    <Sparkles size={16} /> Human style
-                  </Label>
-                  <Switch
-                    id="anti-ai-style"
-                    checked={useAntiAiStyle}
-                    onChange={(event: InputEvent) => setUseAntiAiStyle(event.currentTarget.checked)}
-                  />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="flex items-center justify-between rounded-md border bg-secondary/60 px-3 py-2">
+                    <Label htmlFor="research" className="flex items-center gap-2">
+                      <FlaskConical size={16} /> Research
+                    </Label>
+                    <Switch
+                      id="research"
+                      checked={useResearch}
+                      onChange={(event: InputEvent) => setUseResearch(event.currentTarget.checked)}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between rounded-md border bg-secondary/60 px-3 py-2">
+                    <Label htmlFor="anti-ai-style" className="flex items-center gap-2">
+                      <Sparkles size={16} /> Human style
+                    </Label>
+                    <Switch
+                      id="anti-ai-style"
+                      checked={useAntiAiStyle}
+                      onChange={(event: InputEvent) => setUseAntiAiStyle(event.currentTarget.checked)}
+                    />
+                  </div>
                 </div>
                 <Button disabled={loading} type="submit" className="w-full">
                   {loading ? <Loader2 className="animate-spin" size={17} /> : <Send size={17} />}
                   {loading ? "Writing" : "Generate piece"}
                 </Button>
-                {error && <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
+                {error && (
+                  <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+                    {error}
+                  </p>
+                )}
               </form>
             </CardContent>
           </Card>
-        </aside>
 
-        <section className="min-w-0">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-sm text-muted-foreground">Final Markdown</p>
-              <h2 className="text-3xl font-semibold tracking-normal">
-                {activePiece?.title ?? "No piece selected"}
-              </h2>
-            </div>
-            {activePiece && (
-              <span className="rounded-md border bg-secondary px-3 py-1 text-xs text-secondary-foreground">
-                {activePiece.path}
-              </span>
-            )}
-          </div>
-          <form
-            className="mb-4 rounded-lg border bg-card p-4 shadow-sm"
-            onSubmit={applyFollowup}
-          >
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <Label htmlFor="followup-prompt" className="flex items-center gap-2">
-                <MessageSquarePlus size={16} /> Follow-up
-              </Label>
-              <Button
-                type="submit"
-                variant="secondary"
-                size="sm"
-                disabled={!activePiece || !followupPrompt.trim() || followingUp}
-              >
-                {followingUp ? <Loader2 className="animate-spin" size={15} /> : <Send size={15} />}
-                Revise
-              </Button>
-            </div>
-            <Textarea
-              id="followup-prompt"
-              value={followupPrompt}
-              onInput={(event: TextareaEvent) => setFollowupPrompt(event.currentTarget.value)}
-              placeholder={activePiece ? "Ask for a sharper lede, shorter ending, more examples..." : "Select or generate a piece first."}
-              disabled={!activePiece || followingUp}
-              className="min-h-24 resize-y"
-            />
-          </form>
-          <div className="min-h-[460px] overflow-hidden rounded-lg border bg-card lg:min-h-[760px]">
-            <pre className="h-full min-h-[460px] overflow-auto whitespace-pre-wrap p-6 font-mono text-sm leading-6 lg:min-h-[760px]">
-              {activePiece?.markdown ?? "Awaiting Markdown."}
-            </pre>
-          </div>
-        </section>
-
-        <aside className="flex flex-col gap-4">
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -526,46 +705,75 @@ function App() {
             </CardContent>
           </Card>
 
+          {savedPanel}
+        </section>
+      </main>
+    );
+  }
+
+  const sourceFiles = activePiece.source_files?.length
+    ? activePiece.source_files.join(", ")
+    : "None";
+  const details = [
+    ["Prompt", activePiece.prompt || "Not recorded"],
+    ["Style", activePiece.style || "Not specified"],
+    ["Source files", sourceFiles],
+    ["Research", activePiece.research_enabled ? "Enabled" : "Off"],
+    ["Human style", activePiece.anti_ai_style_enabled ? "Enabled" : "Off"],
+  ];
+  const modelsUsed = [
+    ["Writer", activePiece.writer_model || "Not recorded"],
+    ["Reviewer", activePiece.reviewer_model || "Not recorded"],
+    ["Research", activePiece.research_model || "Not recorded"],
+  ];
+
+  return (
+    <main className="min-h-screen bg-background text-foreground">
+      <section className="mx-auto flex max-w-[1180px] flex-col gap-5 px-5 py-6">
+        <header className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-sm text-muted-foreground">Final Markdown</p>
+            <h1 className="text-3xl font-semibold tracking-normal">{activePiece.title}</h1>
+            <p className="mt-2 max-w-[900px] break-all text-xs text-muted-foreground">{activePiece.path}</p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setActivePiece(null);
+              setReview("");
+              setResearch("");
+              setFollowupPrompt("");
+              setError("");
+            }}
+          >
+            <ArrowLeft size={16} />
+            New piece
+          </Button>
+        </header>
+
+        {error && (
+          <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+            {error}
+          </p>
+        )}
+
+        <div className="grid gap-5 lg:grid-cols-[1fr_380px]">
           <Card>
-            <CardHeader className="flex-row items-center justify-between gap-3">
+            <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <FileText size={18} /> Saved
+                <Sparkles size={18} /> Compose Details
               </CardTitle>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => navigateToView("saved")}
-              >
-                View all
-              </Button>
             </CardHeader>
-            <CardContent className="max-h-80 overflow-auto">
-              <div className="flex flex-col gap-2">
-                {pieces.length === 0 && <p className="text-sm text-muted-foreground">No saved pieces yet.</p>}
-                {latestSavedPieces.map((piece) => (
+            <CardContent>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {details.map(([label, value], index) => (
                   <div
-                    key={piece.slug}
-                    className="group grid grid-cols-[1fr_40px] overflow-hidden rounded-md border bg-background transition-colors hover:bg-accent"
+                    key={label}
+                    className={index === 0 ? "space-y-1 rounded-md border bg-secondary/40 p-3 sm:col-span-2" : "space-y-1 rounded-md border bg-secondary/40 p-3"}
                   >
-                    <button
-                      className="min-w-0 p-3 text-left"
-                      type="button"
-                      onClick={() => loadPiece(piece.slug)}
-                    >
-                      <span className="block text-sm font-medium">{piece.title}</span>
-                      <span className="mt-1 block text-xs text-muted-foreground">
-                        {formatDate(piece.created_at)} {piece.research_enabled ? "with research" : ""}
-                      </span>
-                    </button>
-                    <button
-                      aria-label={`Delete ${piece.title}`}
-                      className="flex items-center justify-center border-l text-muted-foreground transition-colors hover:bg-destructive hover:text-destructive-foreground"
-                      onClick={() => deletePiece(piece)}
-                      type="button"
-                    >
-                      <Trash2 size={16} />
-                    </button>
+                    <p className="text-xs font-medium uppercase tracking-normal text-muted-foreground">{label}</p>
+                    <p className="whitespace-pre-wrap break-words text-sm leading-6">{value}</p>
                   </div>
                 ))}
               </div>
@@ -573,13 +781,88 @@ function App() {
           </Card>
 
           <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Settings2 size={18} /> Models Used
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-col gap-3">
+                {modelsUsed.map(([label, value]) => (
+                  <div key={label} className="space-y-1 rounded-md border bg-secondary/40 p-3">
+                    <p className="text-xs font-medium uppercase tracking-normal text-muted-foreground">{label}</p>
+                    <p className="break-words font-mono text-xs leading-5">{value}</p>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="min-h-[620px] overflow-hidden rounded-lg border bg-card shadow-sm lg:min-h-[780px]">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-normal text-muted-foreground">
+                Written piece
+              </p>
+              <h2 className="text-lg font-semibold tracking-normal">
+                {showMarkdownPreview ? "Preview" : "Markdown source"}
+              </h2>
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              aria-pressed={showMarkdownPreview}
+              onClick={() => setShowMarkdownPreview((current) => !current)}
+            >
+              {showMarkdownPreview ? <Code2 size={15} /> : <Eye size={15} />}
+              {showMarkdownPreview ? "Source" : "Preview"}
+            </Button>
+          </div>
+          {showMarkdownPreview ? (
+            <MarkdownPreview markdown={activePiece.markdown} />
+          ) : (
+            <pre className="h-full min-h-[620px] overflow-auto whitespace-pre-wrap p-6 font-mono text-sm leading-6 sm:p-8 lg:min-h-[780px]">
+              {activePiece.markdown}
+            </pre>
+          )}
+        </div>
+
+        <form className="rounded-lg border bg-card p-4 shadow-sm" onSubmit={applyFollowup}>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <Label htmlFor="followup-prompt" className="flex items-center gap-2">
+              <MessageSquarePlus size={16} /> Follow-up
+            </Label>
+            <Button
+              type="submit"
+              variant="secondary"
+              size="sm"
+              disabled={!followupPrompt.trim() || followingUp}
+            >
+              {followingUp ? <Loader2 className="animate-spin" size={15} /> : <Send size={15} />}
+              Revise
+            </Button>
+          </div>
+          <Textarea
+            id="followup-prompt"
+            value={followupPrompt}
+            onInput={(event: TextareaEvent) => setFollowupPrompt(event.currentTarget.value)}
+            placeholder="Ask for a sharper lede, shorter ending, more examples..."
+            disabled={followingUp}
+            className="min-h-24 resize-y"
+          />
+        </form>
+
+        <div className="grid gap-5 lg:grid-cols-2">
+          <Card>
             <CardHeader className="flex-row items-center justify-between gap-3">
               <CardTitle>Reviewer Notes</CardTitle>
               <Button
                 type="button"
                 variant="secondary"
                 size="sm"
-                disabled={!activePiece || !review.trim() || applyingReview}
+                disabled={!review.trim() || applyingReview}
                 onClick={applyReviewRewrite}
               >
                 {applyingReview ? <Loader2 className="animate-spin" size={15} /> : <RefreshCw size={15} />}
@@ -605,7 +888,7 @@ function App() {
               </CardContent>
             </Card>
           )}
-        </aside>
+        </div>
       </section>
     </main>
   );

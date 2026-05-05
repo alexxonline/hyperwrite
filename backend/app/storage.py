@@ -51,6 +51,8 @@ def save_piece(
     pieces_dir: Path,
     markdown: str,
     prompt: str,
+    style: str,
+    source_files: list[str],
     review: str,
     research_enabled: bool,
     anti_ai_style_enabled: bool,
@@ -81,6 +83,8 @@ def save_piece(
                 "reviewer_model": reviewer_model,
                 "research_model": research_model,
                 "prompt": prompt,
+                "style": style,
+                "source_files": source_files,
                 "review_path": str(review_path),
             },
             indent=2,
@@ -96,6 +100,11 @@ def save_piece(
         markdown=document,
         review=review,
         prompt=prompt,
+        style=style,
+        source_files=source_files,
+        writer_model=writer_model,
+        reviewer_model=reviewer_model,
+        research_model=research_model,
         research_enabled=research_enabled,
         anti_ai_style_enabled=anti_ai_style_enabled,
     )
@@ -244,6 +253,9 @@ def read_piece(pieces_dir: Path, slug: str) -> Piece:
     review_path = metadata.get("review_path")
     if review_path and Path(review_path).exists():
         review = Path(review_path).read_text(encoding="utf-8").strip()
+    source_files = metadata.get("source_files", [])
+    if not isinstance(source_files, list):
+        source_files = [str(source_files)]
     return Piece(
         slug=path.stem,
         title=metadata.get("title") or extract_title(body),
@@ -252,6 +264,11 @@ def read_piece(pieces_dir: Path, slug: str) -> Piece:
         markdown=body,
         review=review,
         prompt=metadata.get("prompt", ""),
+        style=metadata.get("style", ""),
+        source_files=source_files,
+        writer_model=metadata.get("writer_model", ""),
+        reviewer_model=metadata.get("reviewer_model", ""),
+        research_model=metadata.get("research_model", ""),
         research_enabled=metadata.get("research_enabled") in {True, "true"},
         anti_ai_style_enabled=metadata.get("anti_ai_style_enabled") in {True, "true"},
     )
