@@ -3,7 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from .config import Settings
-from .graph import apply_followup_revision, apply_review_rewrite, build_graph
+from .graph import (
+    apply_followup_revision,
+    apply_review_rewrite,
+    build_graph,
+    generate_interview_questions as generate_interview_questions_from_graph,
+)
 from .models import GenerationResponse, ModelDefaults, Piece
 from .storage import read_piece, save_piece, update_piece_markdown
 
@@ -91,6 +96,24 @@ async def generate_piece(
         piece=piece,
         review=result.get("review", ""),
         research=result.get("research", ""),
+    )
+
+
+async def generate_interview_questions(
+    *,
+    settings: Settings,
+    prompt: str,
+    style: str = "",
+    source_documents: str = "",
+    writer_model: str | None = None,
+) -> list[str]:
+    chosen_writer = writer_model or settings.writer_model
+    return await generate_interview_questions_from_graph(
+        settings=settings,
+        prompt=prompt,
+        style=style,
+        source_documents=source_documents,
+        model=chosen_writer,
     )
 
 

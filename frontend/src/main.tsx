@@ -36,6 +36,10 @@ type GenerationResponse = {
   research: string;
 };
 
+type InterviewQuestionsResponse = {
+  questions: string[];
+};
+
 type ModelDefaults = {
   writer_model: string;
   reviewer_model: string;
@@ -69,6 +73,20 @@ function formatDate(value: string) {
 function safeHref(value: string) {
   if (/^(https?:|mailto:|#|\/)/i.test(value)) return value;
   return "#";
+}
+
+function buildInterviewPrompt(prompt: string, questions: string[], answers: string[]) {
+  const answeredQuestions = questions
+    .map((question, index) => ({ question, answer: answers[index]?.trim() ?? "" }))
+    .filter(({ answer }) => answer);
+
+  if (answeredQuestions.length === 0) return prompt;
+
+  return [
+    prompt.trim(),
+    "Interview answers:",
+    ...answeredQuestions.map(({ question, answer }, index) => `${index + 1}. ${question}\nAnswer: ${answer}`),
+  ].join("\n\n");
 }
 
 function renderInline(text: string, keyPrefix: string): Array<string | JSX.Element> {
@@ -248,6 +266,9 @@ function App() {
   const [files, setFiles] = useState<FileList | null>(null);
   const [useResearch, setUseResearch] = useState(false);
   const [useAntiAiStyle, setUseAntiAiStyle] = useState(false);
+  const [useInterview, setUseInterview] = useState(false);
+  const [interviewQuestions, setInterviewQuestions] = useState<string[]>([]);
+  const [interviewAnswers, setInterviewAnswers] = useState<string[]>([]);
   const [writerModel, setWriterModel] = useState("");
   const [reviewerModel, setReviewerModel] = useState("");
   const [researchModel, setResearchModel] = useState("");
@@ -258,6 +279,7 @@ function App() {
   const [view, setView] = useState<View>(() => viewFromPath());
   const [savedSearch, setSavedSearch] = useState("");
   const [loading, setLoading] = useState(false);
+  const [interviewing, setInterviewing] = useState(false);
   const [applyingReview, setApplyingReview] = useState(false);
   const [followingUp, setFollowingUp] = useState(false);
   const [showMarkdownPreview, setShowMarkdownPreview] = useState(false);
@@ -300,6 +322,11 @@ function App() {
     setView(nextView);
   }
 
+  function resetInterview() {
+    setInterviewQuestions([]);
+    setInterviewAnswers([]);
+  }
+
   async function loadPiece(slug: string) {
     setError("");
     const response = await fetch(`${API}/api/pieces/${slug}`);
@@ -315,10 +342,48 @@ function App() {
     navigateToView("desk");
   }
 
+  async function requestInterviewQuestions() {
+    setInterviewing(true);
+    setError("");
+    setReview("");
+    setResearch("");
+    const form = new FormData();
+    form.set("prompt", prompt.trim());
+    form.set("style", style);
+    if (writerModel.trim()) form.set("writer_model", writerModel.trim());
+    Array.from(files ?? []).forEach((file) => form.append("files", file));
+
+    try {
+      const response = await fetch(`${API}/api/interview-questions`, { method: "POST", body: form });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null);
+        throw new Error(detail?.detail ?? "Could not start the interview.");
+      }
+      const result = (await response.json()) as InterviewQuestionsResponse;
+      if (result.questions.length === 0) {
+        throw new Error("The interview step did not return questions.");
+      }
+      setInterviewQuestions(result.questions);
+      setInterviewAnswers(result.questions.map(() => ""));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start the interview.");
+    } finally {
+      setInterviewing(false);
+    }
+  }
+
   async function generatePiece(event: Event) {
     event.preventDefault();
     if (!prompt.trim()) {
       setError("Add a prompt before generating.");
+      return;
+    }
+    if (useInterview && interviewQuestions.length === 0) {
+      await requestInterviewQuestions();
+      return;
+    }
+    if (useInterview && interviewAnswers.every((answer) => !answer.trim())) {
+      setError("Answer at least one interview question before generating.");
       return;
     }
     setLoading(true);
@@ -326,7 +391,10 @@ function App() {
     setReview("");
     setResearch("");
     const form = new FormData();
-    form.set("prompt", prompt);
+    const finalPrompt = useInterview
+      ? buildInterviewPrompt(prompt, interviewQuestions, interviewAnswers)
+      : prompt;
+    form.set("prompt", finalPrompt);
     form.set("style", style);
     form.set("use_research", String(useResearch));
     form.set("use_anti_ai_style", String(useAntiAiStyle));
@@ -347,6 +415,7 @@ function App() {
       setResearch(result.research);
       setUseAntiAiStyle(result.piece.anti_ai_style_enabled);
       setPieces((current) => [result.piece, ...current]);
+      resetInterview();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Generation failed.");
     } finally {
@@ -621,7 +690,10 @@ function App() {
                   <Textarea
                     id="prompt"
                     value={prompt}
-                    onInput={(event: TextareaEvent) => setPrompt(event.currentTarget.value)}
+                    onInput={(event: TextareaEvent) => {
+                      setPrompt(event.currentTarget.value);
+                      resetInterview();
+                    }}
                     placeholder="Write a sharp, evidence-led essay about..."
                     className="min-h-52 resize-y"
                   />
@@ -631,7 +703,10 @@ function App() {
                   <Input
                     id="style"
                     value={style}
-                    onInput={(event: InputEvent) => setStyle(event.currentTarget.value)}
+                    onInput={(event: InputEvent) => {
+                      setStyle(event.currentTarget.value);
+                      resetInterview();
+                    }}
                     placeholder="Concise, editorial, technical, narrative..."
                   />
                 </div>
@@ -642,13 +717,16 @@ function App() {
                     type="file"
                     accept=".md,.markdown,.txt"
                     multiple
-                    onChange={(event: InputEvent) => setFiles(event.currentTarget.files)}
+                    onChange={(event: InputEvent) => {
+                      setFiles(event.currentTarget.files);
+                      resetInterview();
+                    }}
                   />
                   {fileNames.length > 0 && (
                     <p className="text-xs text-muted-foreground">{fileNames.join(", ")}</p>
                   )}
                 </div>
-                <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-3 sm:grid-cols-3">
                   <div className="flex items-center justify-between rounded-md border bg-secondary/60 px-3 py-2">
                     <Label htmlFor="research" className="flex items-center gap-2">
                       <FlaskConical size={16} /> Research
@@ -669,10 +747,43 @@ function App() {
                       onChange={(event: InputEvent) => setUseAntiAiStyle(event.currentTarget.checked)}
                     />
                   </div>
+                  <div className="flex items-center justify-between rounded-md border bg-secondary/60 px-3 py-2">
+                    <Label htmlFor="interview" className="flex items-center gap-2">
+                      <MessageSquarePlus size={16} /> Interview me
+                    </Label>
+                    <Switch
+                      id="interview"
+                      checked={useInterview}
+                      onChange={(event: InputEvent) => {
+                        setUseInterview(event.currentTarget.checked);
+                        resetInterview();
+                      }}
+                    />
+                  </div>
                 </div>
-                <Button disabled={loading} type="submit" className="w-full">
-                  {loading ? <Loader2 className="animate-spin" size={17} /> : <Send size={17} />}
-                  {loading ? "Writing" : "Generate piece"}
+                {useInterview && interviewQuestions.length > 0 && (
+                  <div className="space-y-3 rounded-md border bg-secondary/30 p-3">
+                    {interviewQuestions.map((question, index) => (
+                      <div key={`${question}-${index}`} className="space-y-2">
+                        <Label htmlFor={`interview-answer-${index}`}>{question}</Label>
+                        <Textarea
+                          id={`interview-answer-${index}`}
+                          value={interviewAnswers[index] ?? ""}
+                          onInput={(event: TextareaEvent) => {
+                            const nextAnswers = [...interviewAnswers];
+                            nextAnswers[index] = event.currentTarget.value;
+                            setInterviewAnswers(nextAnswers);
+                          }}
+                          placeholder="Your answer"
+                          className="min-h-20 resize-y bg-background"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <Button disabled={loading || interviewing} type="submit" className="w-full">
+                  {loading || interviewing ? <Loader2 className="animate-spin" size={17} /> : <Send size={17} />}
+                  {loading ? "Writing" : interviewing ? "Preparing questions" : useInterview && interviewQuestions.length === 0 ? "Interview me" : "Generate piece"}
                 </Button>
                 {error && (
                   <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">

@@ -12,6 +12,7 @@ from .service import (
     apply_piece_followup,
     apply_piece_review,
     ensure_storage,
+    generate_interview_questions,
     generate_piece,
     get_model_defaults,
     read_source_files,
@@ -46,6 +47,43 @@ def _prompt_text(args: argparse.Namespace) -> str:
     return prompt
 
 
+def _build_interview_prompt(prompt: str, questions: list[str], answers: list[str]) -> str:
+    answered_questions = [
+        (question, answers[index].strip() if index < len(answers) else "")
+        for index, question in enumerate(questions)
+    ]
+    answered_questions = [
+        (question, answer) for question, answer in answered_questions if answer
+    ]
+    if not answered_questions:
+        return prompt
+    return "\n\n".join(
+        [
+            prompt.strip(),
+            "Interview answers:",
+            *[
+                f"{index + 1}. {question}\nAnswer: {answer}"
+                for index, (question, answer) in enumerate(answered_questions)
+            ],
+        ]
+    )
+
+
+def _read_interview_answers(questions: list[str]) -> list[str]:
+    print("Interview questions. Press Enter to skip a question.", file=sys.stderr)
+    answers: list[str] = []
+    for index, question in enumerate(questions, start=1):
+        print(f"\n{index}. {question}", file=sys.stderr)
+        print("Answer: ", end="", file=sys.stderr, flush=True)
+        raw_answer = sys.stdin.readline()
+        if raw_answer == "":
+            break
+        answers.append(raw_answer.strip())
+    if not any(answer.strip() for answer in answers):
+        raise CliError("Answer at least one interview question before generating.")
+    return answers
+
+
 def _confirm_delete(slug: str) -> bool:
     answer = input(f'Delete "{slug}"? This cannot be undone. [y/N] ')
     return answer.strip().lower() in {"y", "yes"}
@@ -57,6 +95,16 @@ async def _cmd_generate(args: argparse.Namespace) -> int:
     prompt = _prompt_text(args)
     try:
         source_file_names, source_documents = read_source_files(args.source)
+        if args.interview:
+            questions = await generate_interview_questions(
+                settings=settings,
+                prompt=prompt,
+                style=args.style,
+                source_documents=source_documents,
+                writer_model=args.writer_model,
+            )
+            answers = _read_interview_answers(questions)
+            prompt = _build_interview_prompt(prompt, questions, answers)
         result = await generate_piece(
             settings=settings,
             prompt=prompt,
@@ -280,6 +328,12 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Apply the bundled anti-AI writing style guide.",
+    )
+    generate_parser.add_argument(
+        "--interview",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Ask follow-up questions before generating and append answered context to the prompt.",
     )
     generate_parser.add_argument("--writer-model", help="Override WRITER_MODEL.")
     generate_parser.add_argument("--reviewer-model", help="Override REVIEWER_MODEL.")

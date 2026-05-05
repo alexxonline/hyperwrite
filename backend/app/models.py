@@ -29,6 +29,10 @@ class GenerationResponse(BaseModel):
     research: str = ""
 
 
+class InterviewQuestionsResponse(BaseModel):
+    questions: list[str]
+
+
 class ModelDefaults(BaseModel):
     writer_model: str
     reviewer_model: str

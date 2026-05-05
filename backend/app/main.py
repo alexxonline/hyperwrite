@@ -4,13 +4,14 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import Settings, get_settings
-from .models import GenerationResponse, ModelDefaults, Piece, PieceSummary
+from .models import GenerationResponse, InterviewQuestionsResponse, ModelDefaults, Piece, PieceSummary
 from .service import (
     SUPPORTED_SOURCE_SUFFIXES,
     apply_piece_followup as apply_piece_followup_service,
     apply_piece_review as apply_piece_review_service,
     ensure_storage,
     generate_piece,
+    generate_interview_questions,
     get_model_defaults as get_model_defaults_service,
 )
 from .storage import delete_piece, list_pieces, read_piece
@@ -173,3 +174,27 @@ async def create_piece(
     except RuntimeError as exc:
         status_code = 502 if str(exc) == "The writing graph did not return Markdown." else 500
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@app.post("/api/interview-questions", response_model=InterviewQuestionsResponse)
+async def create_interview_questions(
+    prompt: str = Form(...),
+    style: str = Form(""),
+    writer_model: str | None = Form(None),
+    files: list[UploadFile] | None = File(None),
+    settings: Settings = Depends(get_settings),
+) -> InterviewQuestionsResponse:
+    if not prompt.strip():
+        raise HTTPException(status_code=400, detail="Prompt is required.")
+    source_documents = await _read_uploads(files)
+    try:
+        questions = await generate_interview_questions(
+            settings=settings,
+            prompt=prompt.strip(),
+            style=style,
+            source_documents=source_documents,
+            writer_model=writer_model,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return InterviewQuestionsResponse(questions=questions)

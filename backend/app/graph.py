@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
@@ -63,6 +64,82 @@ def _anti_ai_style_context(enabled: bool | None) -> str:
         "in the article.\n\n"
         f"{instructions}"
     )
+
+
+def _parse_interview_questions(content: str) -> list[str]:
+    cleaned = content.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+
+    try:
+        payload = json.loads(cleaned)
+    except json.JSONDecodeError:
+        payload = None
+
+    questions: list[str] = []
+    if isinstance(payload, dict) and isinstance(payload.get("questions"), list):
+        questions = [str(question).strip() for question in payload["questions"]]
+    elif isinstance(payload, list):
+        questions = [str(question).strip() for question in payload]
+    else:
+        for line in cleaned.splitlines():
+            question = line.strip().lstrip("-*0123456789. )").strip()
+            if question:
+                questions.append(question)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for question in questions:
+        normalized = " ".join(question.split())
+        if not normalized or normalized.lower() in seen:
+            continue
+        seen.add(normalized.lower())
+        deduped.append(normalized)
+    return deduped[:6]
+
+
+async def generate_interview_questions(
+    *,
+    settings: Settings,
+    prompt: str,
+    style: str,
+    source_documents: str,
+    model: str,
+) -> list[str]:
+    llm = _chat(settings, model, temperature=0.25)
+    current_date = _current_date_context()
+    response = await llm.ainvoke(
+        [
+            SystemMessage(
+                content=(
+                    "You are an editorial interviewer preparing a writing assignment. "
+                    "Ask only for user-specific context that is relevant to the prompt and "
+                    "missing from the supplied material. Prefer decisions, audience, stance, "
+                    "examples, constraints, and personal or business details that would improve "
+                    "the final piece. Do not ask for facts the writing agent can research. "
+                    "Return strict JSON only: {\"questions\":[\"...\"]}. Ask 3 to 6 concise questions. "
+                    f"Current date: {current_date}."
+                )
+            ),
+            HumanMessage(
+                content=(
+                    f"Current date: {current_date}\n\n"
+                    f"Prompt:\n{prompt}\n\n"
+                    f"Style or constraints:\n{style or 'No extra style constraints.'}\n\n"
+                    f"Source material supplied by the user:\n{source_documents or 'No source files provided.'}"
+                )
+            ),
+        ]
+    )
+    questions = _parse_interview_questions(str(response.content))
+    if not questions:
+        raise RuntimeError("The interview step did not return questions.")
+    return questions
 
 
 async def research_node(state: WritingState, settings: Settings) -> WritingState:

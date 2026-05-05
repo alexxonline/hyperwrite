@@ -11,6 +11,7 @@ Hyperwrite is a local writing studio that works as both a web app and a CLI. It 
 - Draft with a writer agent, review with a reviewer agent, and revise before presenting.
 - Optionally add a research agent that uses Perplexity through OpenRouter.
 - Optionally apply the bundled anti-AI writing style guide for more direct, human-sounding prose.
+- Optionally use Interview me mode to ask for missing context before writing.
 - Use the same features from the browser or from the `hyperwrite` command.
 - Anti AI Style guide by  https://ruben.substack.com/
 
@@ -70,6 +71,12 @@ hyperwrite generate "Turn these notes into an article" \
   --research \
   --anti-ai-style \
   --style "Clear, direct, no hype"
+```
+
+Generate with Interview me mode:
+
+```bash
+hyperwrite generate "Write a founder letter about our product launch" --interview
 ```
 
 Manage saved pieces:
