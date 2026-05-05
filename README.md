@@ -1,5 +1,9 @@
 # Hyperwrite
 
+![Screenshot start page](screenshot_1.png)
+
+![Screenshot start page](screenshot_2.png)
+
 Hyperwrite is a local writing studio that works as both a web app and a CLI. It includes a FastAPI backend, Preact frontend, shadcn/ui-style components, Markdown persistence, and an OpenRouter-powered LangGraph workflow.
 
 ## Features
