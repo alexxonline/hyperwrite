@@ -12,6 +12,9 @@ dependencies = [
   "langgraph>=0.2.0",
 ]
 
+[project.scripts]
+hyperwrite = "app.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["app*"]
