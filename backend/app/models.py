@@ -29,6 +29,20 @@ class GenerationResponse(BaseModel):
     research: str = ""
 
 
+class AngleSuggestion(BaseModel):
+    label: str
+    description: str
+
+
+class AngleSuggestionsResponse(BaseModel):
+    angles: list[AngleSuggestion]
+
+
+class AngleDraftResponse(BaseModel):
+    angle: str
+    markdown: str
+
+
 class InterviewQuestionsResponse(BaseModel):
     questions: list[str]
 

@@ -11,6 +11,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 
 from .config import Settings
+from .models import AngleSuggestion
 
 
 logger = logging.getLogger("hyperwrite.graph")
@@ -103,6 +104,50 @@ def _parse_interview_questions(content: str) -> list[str]:
     return deduped[:6]
 
 
+def _strip_json_fence(content: str) -> str:
+    cleaned = content.strip()
+    if not cleaned.startswith("```"):
+        return cleaned
+    lines = cleaned.splitlines()
+    if lines and lines[0].startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].startswith("```"):
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def _parse_angle_suggestions(content: str) -> list[AngleSuggestion]:
+    cleaned = _strip_json_fence(content)
+    try:
+        payload = json.loads(cleaned)
+    except json.JSONDecodeError:
+        payload = None
+
+    raw_angles: list[object] = []
+    if isinstance(payload, dict) and isinstance(payload.get("angles"), list):
+        raw_angles = payload["angles"]
+    elif isinstance(payload, list):
+        raw_angles = payload
+
+    suggestions: list[AngleSuggestion] = []
+    seen: set[str] = set()
+    for raw_angle in raw_angles:
+        if isinstance(raw_angle, dict):
+            label = str(raw_angle.get("label", "")).strip()
+            description = str(raw_angle.get("description", "")).strip()
+        else:
+            label = str(raw_angle).strip()
+            description = ""
+        normalized = " ".join(label.split())
+        if not normalized or normalized.lower() in seen:
+            continue
+        seen.add(normalized.lower())
+        suggestions.append(
+            AngleSuggestion(label=normalized[:80], description=" ".join(description.split())[:180])
+        )
+    return suggestions[:3]
+
+
 async def generate_interview_questions(
     *,
     settings: Settings,
@@ -140,6 +185,89 @@ async def generate_interview_questions(
     if not questions:
         raise RuntimeError("The interview step did not return questions.")
     return questions
+
+
+async def suggest_piece_angles(
+    *,
+    settings: Settings,
+    article_markdown: str,
+    original_prompt: str,
+    style: str,
+    model: str,
+) -> list[AngleSuggestion]:
+    llm = _chat(settings, model, temperature=0.55)
+    current_date = _current_date_context()
+    response = await llm.ainvoke(
+        [
+            SystemMessage(
+                content=(
+                    "You are an editorial strategist. Read the existing Markdown article and "
+                    "suggest exactly three meaningfully different angles the writer could take "
+                    "next. Each angle should be specific enough to guide a rewrite, not a generic "
+                    "tone change. Return strict JSON only: "
+                    "{\"angles\":[{\"label\":\"...\",\"description\":\"...\"}]}. "
+                    "Labels must be button-friendly, at most 8 words. Descriptions must be at "
+                    "most 24 words. Current date: "
+                    f"{current_date}."
+                )
+            ),
+            HumanMessage(
+                content=(
+                    f"Current date: {current_date}\n\n"
+                    f"Original assignment:\n{original_prompt or 'No original prompt was stored.'}\n\n"
+                    f"Style or constraints:\n{style or 'No extra style constraints.'}\n\n"
+                    f"Current article Markdown:\n{article_markdown}"
+                )
+            ),
+        ]
+    )
+    angles = _parse_angle_suggestions(str(response.content))
+    if len(angles) != 3:
+        raise RuntimeError("The angle step did not return three usable angles.")
+    return angles
+
+
+async def generate_angle_draft(
+    *,
+    settings: Settings,
+    article_markdown: str,
+    original_prompt: str,
+    style: str,
+    angle: str,
+    writer_model: str,
+    use_anti_ai_style: bool = False,
+) -> str:
+    llm = _chat(settings, writer_model, temperature=0.62)
+    current_date = _current_date_context()
+    style_context = _anti_ai_style_context(use_anti_ai_style)
+    response = await llm.ainvoke(
+        [
+            SystemMessage(
+                content=(
+                    "You are a senior writing agent. Rewrite the existing Markdown article around "
+                    "the selected editorial angle. Preserve accurate facts and useful source-driven "
+                    "material, but change the framing, structure, emphasis, and examples as needed "
+                    "so the new angle feels intentional. Return only the draft Markdown, beginning "
+                    "with one H1 title. Do not include explanations, options, or process notes. "
+                    f"Current date: {current_date}."
+                    f"{style_context}"
+                )
+            ),
+            HumanMessage(
+                content=(
+                    f"Current date: {current_date}\n\n"
+                    f"Original assignment:\n{original_prompt or 'No original prompt was stored.'}\n\n"
+                    f"Style or constraints:\n{style or 'No extra style constraints.'}\n\n"
+                    f"Selected angle:\n{angle}\n\n"
+                    f"Current article Markdown:\n{article_markdown}"
+                )
+            ),
+        ]
+    )
+    draft = str(response.content).strip()
+    if not draft:
+        raise RuntimeError("The angle draft step did not return Markdown.")
+    return draft
 
 
 async def research_node(state: WritingState, settings: Settings) -> WritingState:

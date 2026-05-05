@@ -1,6 +1,6 @@
 import { JSX, render } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { ArrowLeft, BookOpenText, Code2, Eye, FileText, FlaskConical, Loader2, MessageSquarePlus, RefreshCw, Search, Send, Settings2, Sparkles, Trash2 } from "lucide-preact";
+import { ArrowLeft, BookOpenText, Check, Code2, Compass, Eye, FileText, FlaskConical, Loader2, MessageSquarePlus, RefreshCw, Search, Send, Settings2, Sparkles, Trash2, X } from "lucide-preact";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -38,6 +38,20 @@ type GenerationResponse = {
 
 type InterviewQuestionsResponse = {
   questions: string[];
+};
+
+type AngleSuggestion = {
+  label: string;
+  description: string;
+};
+
+type AngleSuggestionsResponse = {
+  angles: AngleSuggestion[];
+};
+
+type AngleDraftResponse = {
+  angle: string;
+  markdown: string;
 };
 
 type ModelDefaults = {
@@ -282,6 +296,11 @@ function App() {
   const [interviewing, setInterviewing] = useState(false);
   const [applyingReview, setApplyingReview] = useState(false);
   const [followingUp, setFollowingUp] = useState(false);
+  const [angleSuggestions, setAngleSuggestions] = useState<AngleSuggestion[]>([]);
+  const [angleDraft, setAngleDraft] = useState<AngleDraftResponse | null>(null);
+  const [suggestingAngles, setSuggestingAngles] = useState(false);
+  const [draftingAngle, setDraftingAngle] = useState("");
+  const [acceptingAngle, setAcceptingAngle] = useState(false);
   const [showMarkdownPreview, setShowMarkdownPreview] = useState(false);
   const [error, setError] = useState("");
 
@@ -327,6 +346,14 @@ function App() {
     setInterviewAnswers([]);
   }
 
+  function resetAngleFlow() {
+    setAngleSuggestions([]);
+    setAngleDraft(null);
+    setSuggestingAngles(false);
+    setDraftingAngle("");
+    setAcceptingAngle(false);
+  }
+
   async function loadPiece(slug: string) {
     setError("");
     const response = await fetch(`${API}/api/pieces/${slug}`);
@@ -339,6 +366,7 @@ function App() {
     setReview(piece.review);
     setResearch("");
     setUseAntiAiStyle(piece.anti_ai_style_enabled);
+    resetAngleFlow();
     navigateToView("desk");
   }
 
@@ -416,6 +444,7 @@ function App() {
       setUseAntiAiStyle(result.piece.anti_ai_style_enabled);
       setPieces((current) => [result.piece, ...current]);
       resetInterview();
+      resetAngleFlow();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Generation failed.");
     } finally {
@@ -447,6 +476,7 @@ function App() {
       const piece = (await response.json()) as Piece;
       setActivePiece(piece);
       setReview(piece.review);
+      resetAngleFlow();
       setPieces((current) =>
         current.map((saved) => (saved.slug === piece.slug ? piece : saved)),
       );
@@ -491,6 +521,7 @@ function App() {
       setActivePiece(piece);
       setReview(piece.review);
       setFollowupPrompt("");
+      resetAngleFlow();
       setPieces((current) =>
         current.map((saved) => (saved.slug === piece.slug ? piece : saved)),
       );
@@ -498,6 +529,105 @@ function App() {
       setError(err instanceof Error ? err.message : "Could not apply the follow-up.");
     } finally {
       setFollowingUp(false);
+    }
+  }
+
+  async function requestAngles() {
+    if (!activePiece) {
+      setError("Select or generate a piece before exploring angles.");
+      return;
+    }
+    setSuggestingAngles(true);
+    setError("");
+    setAngleDraft(null);
+    const form = new FormData();
+    const selectedWriterModel = activePiece.writer_model || writerModel;
+    if (selectedWriterModel.trim()) form.set("writer_model", selectedWriterModel.trim());
+
+    try {
+      const response = await fetch(`${API}/api/pieces/${activePiece.slug}/angles`, {
+        method: "POST",
+        body: form,
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null);
+        throw new Error(detail?.detail ?? "Could not generate angles.");
+      }
+      const result = (await response.json()) as AngleSuggestionsResponse;
+      setAngleSuggestions(result.angles);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not generate angles.");
+    } finally {
+      setSuggestingAngles(false);
+    }
+  }
+
+  async function draftAngle(angle: AngleSuggestion) {
+    if (!activePiece) {
+      setError("Select or generate a piece before drafting an angle.");
+      return;
+    }
+    setDraftingAngle(angle.label);
+    setError("");
+    const form = new FormData();
+    form.set("angle", `${angle.label}: ${angle.description}`.trim());
+    form.set("use_anti_ai_style", String(useAntiAiStyle));
+    const selectedWriterModel = activePiece.writer_model || writerModel;
+    if (selectedWriterModel.trim()) form.set("writer_model", selectedWriterModel.trim());
+
+    try {
+      const response = await fetch(`${API}/api/pieces/${activePiece.slug}/angles/draft`, {
+        method: "POST",
+        body: form,
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null);
+        throw new Error(detail?.detail ?? "Could not draft that angle.");
+      }
+      const result = (await response.json()) as AngleDraftResponse;
+      setAngleDraft(result);
+      setShowMarkdownPreview(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not draft that angle.");
+    } finally {
+      setDraftingAngle("");
+    }
+  }
+
+  async function acceptAngleDraft() {
+    if (!activePiece || !angleDraft) {
+      setError("Generate an angle draft before accepting it.");
+      return;
+    }
+    setAcceptingAngle(true);
+    setError("");
+    const form = new FormData();
+    form.set("angle", angleDraft.angle);
+    form.set("draft_markdown", angleDraft.markdown);
+    form.set("use_anti_ai_style", String(useAntiAiStyle));
+    const selectedWriterModel = activePiece.writer_model || writerModel;
+    if (selectedWriterModel.trim()) form.set("writer_model", selectedWriterModel.trim());
+
+    try {
+      const response = await fetch(`${API}/api/pieces/${activePiece.slug}/angles/accept`, {
+        method: "POST",
+        body: form,
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null);
+        throw new Error(detail?.detail ?? "Could not accept that angle draft.");
+      }
+      const piece = (await response.json()) as Piece;
+      setActivePiece(piece);
+      setUseAntiAiStyle(piece.anti_ai_style_enabled);
+      setPieces((current) =>
+        current.map((saved) => (saved.slug === piece.slug ? piece : saved)),
+      );
+      resetAngleFlow();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not accept that angle draft.");
+    } finally {
+      setAcceptingAngle(false);
     }
   }
 
@@ -517,6 +647,7 @@ function App() {
         setReview("");
         setResearch("");
         setFollowupPrompt("");
+        resetAngleFlow();
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not delete that piece.");
@@ -837,6 +968,8 @@ function App() {
     ["Reviewer", activePiece.reviewer_model || "Not recorded"],
     ["Research", activePiece.research_model || "Not recorded"],
   ];
+  const displayedMarkdown = angleDraft?.markdown ?? activePiece.markdown;
+  const angleBusy = suggestingAngles || Boolean(draftingAngle) || acceptingAngle;
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -856,6 +989,7 @@ function App() {
               setResearch("");
               setFollowupPrompt("");
               setError("");
+              resetAngleFlow();
             }}
           >
             <ArrowLeft size={16} />
@@ -914,28 +1048,118 @@ function App() {
           <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
             <div>
               <p className="text-xs font-medium uppercase tracking-normal text-muted-foreground">
-                Written piece
+                {angleDraft ? "Temporary angle draft" : "Written piece"}
               </p>
               <h2 className="text-lg font-semibold tracking-normal">
                 {showMarkdownPreview ? "Preview" : "Markdown source"}
               </h2>
             </div>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              aria-pressed={showMarkdownPreview}
-              onClick={() => setShowMarkdownPreview((current) => !current)}
-            >
-              {showMarkdownPreview ? <Code2 size={15} /> : <Eye size={15} />}
-              {showMarkdownPreview ? "Source" : "Preview"}
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={angleBusy}
+                onClick={requestAngles}
+              >
+                {suggestingAngles ? <Loader2 className="animate-spin" size={15} /> : <Compass size={15} />}
+                Angles
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                aria-pressed={showMarkdownPreview}
+                onClick={() => setShowMarkdownPreview((current) => !current)}
+              >
+                {showMarkdownPreview ? <Code2 size={15} /> : <Eye size={15} />}
+                {showMarkdownPreview ? "Source" : "Preview"}
+              </Button>
+            </div>
           </div>
+          {(angleSuggestions.length > 0 || angleDraft) && (
+            <div className="border-b bg-secondary/35 px-4 py-3">
+              {angleDraft ? (
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium uppercase tracking-normal text-muted-foreground">
+                      Selected angle
+                    </p>
+                    <p className="truncate text-sm font-medium">{angleDraft.angle}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      disabled={acceptingAngle}
+                      onClick={acceptAngleDraft}
+                    >
+                      {acceptingAngle ? <Loader2 className="animate-spin" size={15} /> : <Check size={15} />}
+                      Accept
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={acceptingAngle}
+                      onClick={() => setAngleDraft(null)}
+                    >
+                      <X size={15} />
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-sm font-medium">Choose a direction</p>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={angleBusy}
+                      onClick={resetAngleFlow}
+                    >
+                      <X size={15} />
+                      Cancel
+                    </Button>
+                  </div>
+                  <div className="grid gap-2 md:grid-cols-3">
+                    {angleSuggestions.map((angle) => (
+                      <Button
+                        key={`${angle.label}-${angle.description}`}
+                        type="button"
+                        variant="outline"
+                        className="h-auto min-h-20 justify-start whitespace-normal px-3 py-3 text-left"
+                        disabled={Boolean(draftingAngle)}
+                        onClick={() => draftAngle(angle)}
+                      >
+                        {draftingAngle === angle.label ? (
+                          <Loader2 className="shrink-0 animate-spin" size={15} />
+                        ) : (
+                          <Compass className="shrink-0" size={15} />
+                        )}
+                        <span className="min-w-0">
+                          <span className="block text-sm font-semibold">{angle.label}</span>
+                          {angle.description && (
+                            <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                              {angle.description}
+                            </span>
+                          )}
+                        </span>
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           {showMarkdownPreview ? (
-            <MarkdownPreview markdown={activePiece.markdown} />
+            <MarkdownPreview markdown={displayedMarkdown} />
           ) : (
             <pre className="h-full min-h-[620px] overflow-auto whitespace-pre-wrap p-6 font-mono text-sm leading-6 sm:p-8 lg:min-h-[780px]">
-              {activePiece.markdown}
+              {displayedMarkdown}
             </pre>
           )}
         </div>

@@ -16,6 +16,7 @@ Hyperwrite is a local writing studio that works as both a web app and a CLI. It 
 - Optionally add a research agent that uses Perplexity through OpenRouter.
 - Optionally apply the bundled anti-AI writing style guide for more direct, human-sounding prose.
 - Optionally use Interview me mode to ask for missing context before writing.
+- Generate three alternate editorial angles for a saved piece, preview one as a temporary draft, and accept it only when it fits.
 - Use the same features from the browser or from the `hyperwrite` command.
 - Anti AI Style guide by  https://ruben.substack.com/
 
@@ -99,6 +100,9 @@ Revise saved pieces:
 ```bash
 hyperwrite apply-review <slug>
 hyperwrite follow-up <slug> "Make the intro shorter and add a stronger ending"
+hyperwrite angles <slug>
+hyperwrite angles <slug> --suggest-only
+hyperwrite angles <slug> --angle "Customer proof first" --draft-only
 ```
 
 Inspect configuration:

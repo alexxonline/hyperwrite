@@ -9,13 +9,16 @@ from typing import Any
 
 from .config import get_settings
 from .service import (
+    accept_piece_angle_draft,
     apply_piece_followup,
     apply_piece_review,
     ensure_storage,
+    generate_piece_angle_draft,
     generate_interview_questions,
     generate_piece,
     get_model_defaults,
     read_source_files,
+    suggest_piece_angles,
 )
 from .storage import delete_piece, list_pieces, read_piece
 
@@ -28,12 +31,18 @@ def _model_to_dict(model: Any) -> dict[str, Any]:
     return model.model_dump(mode="json")
 
 
-def _print_json(value: Any) -> None:
+def _jsonable(value: Any) -> Any:
     if hasattr(value, "model_dump"):
-        value = _model_to_dict(value)
-    elif isinstance(value, list):
-        value = [_model_to_dict(item) if hasattr(item, "model_dump") else item for item in value]
-    print(json.dumps(value, indent=2))
+        return _model_to_dict(value)
+    if isinstance(value, list):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _jsonable(item) for key, item in value.items()}
+    return value
+
+
+def _print_json(value: Any) -> None:
+    print(json.dumps(_jsonable(value), indent=2))
 
 
 def _prompt_text(args: argparse.Namespace) -> str:
@@ -87,6 +96,28 @@ def _read_interview_answers(questions: list[str]) -> list[str]:
 def _confirm_delete(slug: str) -> bool:
     answer = input(f'Delete "{slug}"? This cannot be undone. [y/N] ')
     return answer.strip().lower() in {"y", "yes"}
+
+
+def _confirm_accept_angle() -> bool:
+    answer = input("Accept this angle draft and replace the saved piece? [y/N] ")
+    return answer.strip().lower() in {"y", "yes"}
+
+
+def _select_angle(angles: list[Any]) -> str:
+    print("Suggested angles:")
+    for index, angle in enumerate(angles, start=1):
+        description = f" - {angle.description}" if angle.description else ""
+        print(f"{index}. {angle.label}{description}")
+    answer = input("Choose 1-3, or c to cancel: ").strip().lower()
+    if answer in {"c", "cancel", "q", "quit"}:
+        raise CliError("Angle selection cancelled.")
+    try:
+        selected = int(answer)
+    except ValueError as exc:
+        raise CliError("Choose 1, 2, or 3.") from exc
+    if selected < 1 or selected > len(angles):
+        raise CliError("Choose 1, 2, or 3.")
+    return angles[selected - 1].label
 
 
 async def _cmd_generate(args: argparse.Namespace) -> int:
@@ -259,6 +290,73 @@ async def _cmd_follow_up(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _cmd_angles(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    try:
+        read_piece(settings.pieces_dir, args.slug)
+    except FileNotFoundError as exc:
+        raise CliError(f"Piece not found: {args.slug}") from exc
+
+    angle = (args.angle or "").strip()
+    if not angle:
+        angles = await suggest_piece_angles(
+            settings=settings,
+            slug=args.slug,
+            writer_model=args.writer_model,
+        )
+        if args.json or args.suggest_only:
+            if args.json:
+                _print_json({"angles": angles})
+            else:
+                for index, suggestion in enumerate(angles, start=1):
+                    description = f" - {suggestion.description}" if suggestion.description else ""
+                    print(f"{index}. {suggestion.label}{description}")
+            return 0
+        angle = _select_angle(angles)
+
+    draft = await generate_piece_angle_draft(
+        settings=settings,
+        slug=args.slug,
+        angle=angle,
+        writer_model=args.writer_model,
+        use_anti_ai_style=args.anti_ai_style,
+    )
+
+    if args.draft_only or (args.json and not args.accept):
+        if args.json:
+            _print_json(draft)
+        else:
+            print(draft.markdown.rstrip())
+        return 0
+
+    if not args.accept:
+        print("\n--- Angle Draft ---\n")
+        print(draft.markdown.rstrip())
+        print()
+        if not _confirm_accept_angle():
+            print("Angle rewrite not accepted.")
+            return 0
+
+    piece = await accept_piece_angle_draft(
+        settings=settings,
+        slug=args.slug,
+        angle=draft.angle,
+        draft_markdown=draft.markdown,
+        writer_model=args.writer_model,
+        use_anti_ai_style=args.anti_ai_style,
+    )
+
+    if args.json:
+        _print_json(piece)
+        return 0
+    print(f"Updated: {piece.title}")
+    print(f"Slug: {piece.slug}")
+    print(f"Path: {piece.path}")
+    if args.print_markdown:
+        print("\n" + piece.markdown.rstrip())
+    return 0
+
+
 def _cmd_models(args: argparse.Namespace) -> int:
     defaults = get_model_defaults(get_settings())
     if args.json:
@@ -396,6 +494,41 @@ def build_parser() -> argparse.ArgumentParser:
     follow_up_parser.add_argument("--json", action="store_true", help="Print the updated piece as JSON.")
     follow_up_parser.add_argument("--print-markdown", action="store_true", help="Print updated Markdown.")
     follow_up_parser.set_defaults(handler=_cmd_follow_up)
+
+    angles_parser = subparsers.add_parser(
+        "angles",
+        help="Suggest alternate angles for a saved piece and optionally rewrite it.",
+    )
+    angles_parser.add_argument("slug", help="Saved piece slug.")
+    angles_parser.add_argument(
+        "--angle",
+        help="Skip suggestions and generate a draft for this angle.",
+    )
+    angles_parser.add_argument(
+        "--suggest-only",
+        action="store_true",
+        help="Only print the three suggested angles.",
+    )
+    angles_parser.add_argument("--writer-model", help="Override WRITER_MODEL.")
+    angles_parser.add_argument(
+        "--anti-ai-style",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Override whether the anti-AI style guide is applied to the draft.",
+    )
+    angles_parser.add_argument(
+        "--draft-only",
+        action="store_true",
+        help="Generate and print the selected angle draft without saving it.",
+    )
+    angles_parser.add_argument(
+        "--accept",
+        action="store_true",
+        help="Accept the generated draft without an interactive confirmation.",
+    )
+    angles_parser.add_argument("--json", action="store_true", help="Print JSON output.")
+    angles_parser.add_argument("--print-markdown", action="store_true", help="Print accepted Markdown.")
+    angles_parser.set_defaults(handler=_cmd_angles)
 
     models_parser = subparsers.add_parser("models", help="Show configured model defaults.")
     models_parser.add_argument("--json", action="store_true", help="Print model defaults as JSON.")

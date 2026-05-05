@@ -7,9 +7,11 @@ from .graph import (
     apply_followup_revision,
     apply_review_rewrite,
     build_graph,
+    generate_angle_draft as generate_angle_draft_from_graph,
     generate_interview_questions as generate_interview_questions_from_graph,
+    suggest_piece_angles as suggest_piece_angles_from_graph,
 )
-from .models import GenerationResponse, ModelDefaults, Piece
+from .models import AngleDraftResponse, AngleSuggestion, GenerationResponse, ModelDefaults, Piece
 from .storage import read_piece, save_piece, update_piece_markdown
 
 
@@ -114,6 +116,81 @@ async def generate_interview_questions(
         style=style,
         source_documents=source_documents,
         model=chosen_writer,
+    )
+
+
+async def suggest_piece_angles(
+    *,
+    settings: Settings,
+    slug: str,
+    writer_model: str | None = None,
+) -> list[AngleSuggestion]:
+    piece = read_piece(settings.pieces_dir, slug)
+    chosen_writer = writer_model or piece.writer_model or settings.writer_model
+    return await suggest_piece_angles_from_graph(
+        settings=settings,
+        article_markdown=piece.markdown,
+        original_prompt=piece.prompt,
+        style=piece.style,
+        model=chosen_writer,
+    )
+
+
+async def generate_piece_angle_draft(
+    *,
+    settings: Settings,
+    slug: str,
+    angle: str,
+    writer_model: str | None = None,
+    use_anti_ai_style: bool | None = None,
+) -> AngleDraftResponse:
+    if not angle.strip():
+        raise ValueError("Angle is required.")
+
+    piece = read_piece(settings.pieces_dir, slug)
+    chosen_writer = writer_model or piece.writer_model or settings.writer_model
+    chosen_anti_ai_style = (
+        piece.anti_ai_style_enabled if use_anti_ai_style is None else use_anti_ai_style
+    )
+    markdown = await generate_angle_draft_from_graph(
+        settings=settings,
+        article_markdown=piece.markdown,
+        original_prompt=piece.prompt,
+        style=piece.style,
+        angle=angle.strip(),
+        writer_model=chosen_writer,
+        use_anti_ai_style=chosen_anti_ai_style,
+    )
+    return AngleDraftResponse(angle=angle.strip(), markdown=markdown)
+
+
+async def accept_piece_angle_draft(
+    *,
+    settings: Settings,
+    slug: str,
+    angle: str,
+    draft_markdown: str,
+    writer_model: str | None = None,
+    use_anti_ai_style: bool | None = None,
+) -> Piece:
+    if not angle.strip():
+        raise ValueError("Angle is required.")
+    if not draft_markdown.strip():
+        raise ValueError("Draft Markdown is required.")
+
+    piece = read_piece(settings.pieces_dir, slug)
+    chosen_writer = writer_model or piece.writer_model or settings.writer_model
+    chosen_anti_ai_style = (
+        piece.anti_ai_style_enabled if use_anti_ai_style is None else use_anti_ai_style
+    )
+    return update_piece_markdown(
+        pieces_dir=settings.pieces_dir,
+        slug=slug,
+        markdown=draft_markdown,
+        writer_model=chosen_writer,
+        review=piece.review,
+        followup_prompt=f"Angle rewrite: {angle.strip()}",
+        anti_ai_style_enabled=chosen_anti_ai_style,
     )
 
 

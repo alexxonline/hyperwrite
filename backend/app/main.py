@@ -4,15 +4,26 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import Settings, get_settings
-from .models import GenerationResponse, InterviewQuestionsResponse, ModelDefaults, Piece, PieceSummary
+from .models import (
+    AngleDraftResponse,
+    AngleSuggestionsResponse,
+    GenerationResponse,
+    InterviewQuestionsResponse,
+    ModelDefaults,
+    Piece,
+    PieceSummary,
+)
 from .service import (
     SUPPORTED_SOURCE_SUFFIXES,
+    accept_piece_angle_draft as accept_piece_angle_draft_service,
     apply_piece_followup as apply_piece_followup_service,
     apply_piece_review as apply_piece_review_service,
     ensure_storage,
+    generate_piece_angle_draft as generate_piece_angle_draft_service,
     generate_piece,
     generate_interview_questions,
     get_model_defaults as get_model_defaults_service,
+    suggest_piece_angles as suggest_piece_angles_service,
 )
 from .storage import delete_piece, list_pieces, read_piece
 
@@ -142,6 +153,82 @@ async def apply_piece_followup(
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/pieces/{slug}/angles", response_model=AngleSuggestionsResponse)
+async def suggest_piece_angles(
+    slug: str,
+    writer_model: str | None = Form(None),
+    settings: Settings = Depends(get_settings),
+) -> AngleSuggestionsResponse:
+    try:
+        read_piece(settings.pieces_dir, slug)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Piece not found.") from exc
+
+    try:
+        angles = await suggest_piece_angles_service(
+            settings=settings,
+            slug=slug,
+            writer_model=writer_model,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return AngleSuggestionsResponse(angles=angles)
+
+
+@app.post("/api/pieces/{slug}/angles/draft", response_model=AngleDraftResponse)
+async def generate_piece_angle_draft(
+    slug: str,
+    angle: str = Form(...),
+    writer_model: str | None = Form(None),
+    use_anti_ai_style: bool | None = Form(None),
+    settings: Settings = Depends(get_settings),
+) -> AngleDraftResponse:
+    try:
+        read_piece(settings.pieces_dir, slug)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Piece not found.") from exc
+
+    try:
+        return await generate_piece_angle_draft_service(
+            settings=settings,
+            slug=slug,
+            angle=angle,
+            writer_model=writer_model,
+            use_anti_ai_style=use_anti_ai_style,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/pieces/{slug}/angles/accept", response_model=Piece)
+async def accept_piece_angle_draft(
+    slug: str,
+    angle: str = Form(...),
+    draft_markdown: str = Form(...),
+    writer_model: str | None = Form(None),
+    use_anti_ai_style: bool | None = Form(None),
+    settings: Settings = Depends(get_settings),
+) -> Piece:
+    try:
+        read_piece(settings.pieces_dir, slug)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Piece not found.") from exc
+
+    try:
+        return await accept_piece_angle_draft_service(
+            settings=settings,
+            slug=slug,
+            angle=angle,
+            draft_markdown=draft_markdown,
+            writer_model=writer_model,
+            use_anti_ai_style=use_anti_ai_style,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/pieces", response_model=GenerationResponse)
